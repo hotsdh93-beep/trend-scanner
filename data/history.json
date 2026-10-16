@@ -1,0 +1,30 @@
+[
+{
+"market": "us",
+"asOf": "2026-10-15",
+"scannedAt": "2026-10-16T14:06:37+09:00",
+"universe": 1838,
+"analyzed": 1798,
+"missing": 0,
+"pass": 260,
+"near": 183,
+"vcp": 41,
+"patterns": 104,
+"seconds": 133,
+"intraday": false
+},
+{
+"market": "kr",
+"asOf": "2026-10-16",
+"scannedAt": "2026-10-16T17:50:43+09:00",
+"universe": 654,
+"analyzed": 640,
+"missing": 0,
+"pass": 38,
+"near": 32,
+"vcp": 5,
+"patterns": 5,
+"seconds": 41,
+"intraday": false
+}
+]

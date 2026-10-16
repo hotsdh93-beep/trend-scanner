@@ -1,0 +1,54 @@
+﻿휴대폰 앱 만들기 (GitHub 무료)
+==============================
+
+컴퓨터가 꺼져 있어도 GitHub가 매일 스캔하고, 결과를 휴대폰 앱처럼 열어 볼 수 있게 됩니다.
+처음 한 번만 15분 정도 설정하면 됩니다. 비용은 없습니다.
+
+1. GitHub 가입
+   https://github.com 에서 무료 계정을 만듭니다. (이미 있으면 로그인)
+
+2. 저장소 만들기
+   - 오른쪽 위 [+] → [New repository]
+   - Repository name: trend-scanner
+   - [Public] 선택 (무료로 웹앱을 쓰려면 공개 저장소여야 합니다. 아래 '알아둘 점' 참고)
+   - [Create repository]
+
+3. 파일 올리기
+   - 만들어진 화면에서 "uploading an existing file" 링크를 누릅니다.
+   - 트렌드스캐너 폴더 안의 내용을 전부 끌어다 놓습니다. .github 폴더와 assets 폴더도 꼭 포함하세요.
+     (logs, 트렌드스캐너.html 은 빼도 됩니다)
+   - 아래 [Commit changes]를 누릅니다.
+   - 확인: 저장소 첫 화면에 .github 폴더가 보여야 합니다.
+     안 보이면: [Add file] → [Create new file] → 이름 칸에 .github/workflows/scan.yml 입력 →
+     폴더의 .github\workflows\scan.yml 내용을 메모장으로 열어 전부 복사해 붙여넣기 → [Commit changes]
+
+4. 웹앱(Pages) 켜기
+   - 저장소 위쪽 [Settings] → 왼쪽 [Pages]
+   - Build and deployment 의 Source 를 [GitHub Actions] 로 바꿉니다.
+
+5. 첫 스캔 실행
+   - 저장소 위쪽 [Actions] 탭 (처음이면 초록 버튼으로 워크플로 사용을 허용)
+   - 왼쪽 [트렌드 스캔] → 오른쪽 [Run workflow] → all → [Run workflow]
+   - 10~20분 뒤 초록 체크가 뜨면 완료입니다.
+
+6. 휴대폰에 앱 추가
+   - [Settings] → [Pages] 맨 위에 나온 주소를 확인합니다.
+     보통 https://내아이디.github.io/trend-scanner/
+   - 휴대폰 브라우저로 그 주소를 엽니다.
+     · 아이폰(Safari): 아래 공유 버튼 → [홈 화면에 추가]
+     · 안드로이드(Chrome): 오른쪽 위 ⋮ → [홈 화면에 추가] 또는 [앱 설치]
+   - 홈 화면의 '트렌드스캐너' 아이콘으로 열면 앱처럼 전체 화면으로 열립니다.
+   - PC 앱의 설정 > '휴대폰 앱 주소'에 같은 주소를 넣어 두면 PC에서도 버튼으로 열 수 있습니다.
+
+이후
+   - 한국장 평일 17:50, 미국장 화~토 07:20(한국 시간)쯤 자동으로 스캔해 웹앱이 갱신됩니다.
+     GitHub 사정으로 5~30분 늦어질 때가 있습니다.
+   - 시총 기준을 바꾸려면 저장소의 config.json 을 열어 연필 아이콘으로 숫자를 고치고 저장하세요.
+     (kr_min_cap_eok = 한국 억 원, us_min_cap_eok_usd = 미국 억 달러)
+   - 휴대폰 앱이 잘 돌면 PC 앱의 '평일 자동 스캔'은 꺼도 됩니다. 둘 다 켜 둬도 문제는 없습니다.
+
+알아둘 점
+   - 공개 저장소라 주소를 아는 사람은 결과 화면과 저장소를 볼 수 있습니다(검색에 잘 걸리진 않습니다).
+     스캔 결과만 있고 개인 정보는 없습니다. 비공개로 쓰려면 GitHub Pro(유료)가 필요합니다.
+   - 실행이 실패하면 [Actions] 탭에 빨간 X가 표시되고 메일이 옵니다. 그 화면을 Claude에게 보여주세요.
+   - Yahoo가 GitHub 서버의 접속을 가끔 막을 수 있습니다. 그런 날은 PC 앱으로 스캔하면 됩니다.
