@@ -55,12 +55,16 @@ def load_config():
         return
     if c.get("kr_min_cap_eok"):
         SETTINGS["kr"]["min_cap"] = float(c["kr_min_cap_eok"]) * 1e8      # 억 원
+    global PATTERN_RS_MIN
+    if c.get("pattern_rs_min"):
+        PATTERN_RS_MIN = int(c["pattern_rs_min"])
     if c.get("us_min_cap_eok_usd"):
         SETTINGS["us"]["min_cap"] = float(c["us_min_cap_eok_usd"]) * 1e8  # 억 달러
 
 
 RS_MIN = 70            # 8번째 조건: RS 70 이상
 KEEP_NEAR_RS = 80      # 7개 충족 종목은 RS 80 이상만 결과표에 남김
+PATTERN_RS_MIN = 85    # VCP·베이스 패턴 후보는 RS 85 이상만 (config.json의 pattern_rs_min으로 변경)
 BATCH = 80             # 한 번에 내려받을 종목 수
 
 log = logging.getLogger("scanner")
@@ -523,7 +527,7 @@ def scan(market):
             "s": u["s"], "n": u["n"], "ex": u["ex"], "p": _r(a["p"], 4), "chg": _r(a["chg"], 2), "rs": rs, "score": score,
             "crit": "".join("1" if c else "0" for c in crit),
             "fromHi": _r((a["p"] / a["hi"] - 1) * 100), "vs50": _r((a["p"] / a["m50"] - 1) * 100),
-            "volRatio": _r(a["vol"], 2), "vcp": 1 if (v["ok"] and score == 8) else 0,
+            "volRatio": _r(a["vol"], 2), "vcp": 1 if (v["ok"] and score == 8 and rs >= PATTERN_RS_MIN) else 0,
             "vcpDepths": "/".join(f"{d:g}" for d in v["depths"]), "toPivot": _r(v["toPivot"]), "dryUp": _r(v["dryUp"], 2),
             "spark": a["spark"],
         })
@@ -532,7 +536,8 @@ def scan(market):
         "market": market, "asOf": as_of, "scannedAt": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "universe": len(uni), "analyzed": len(valid), "missing": len([u for u in uni if u["s"] not in prices]),
         "pass": int(sum(r["score"] == 8 for r in rows)), "near": int(near_all), "vcp": int(sum(r["vcp"] for r in rows)),
-        "patterns": int(sum(1 for r in rows if r["score"] == 8 and r["pattern"] and r["pattern"] != "컵 형성")),
+        "patterns": int(sum(1 for r in rows if r["score"] == 8 and r["rs"] >= PATTERN_RS_MIN and r["pattern"] and r["pattern"] != "컵 형성")),
+        "patRs": PATTERN_RS_MIN,
         "seconds": round(time.time() - t0),
         "intraday": bool(as_of and market_open_now(market, as_of)),
     }
@@ -635,8 +640,8 @@ details li{margin:3px 0}svg text{fill:var(--muted);font-size:11px}
 <li>주가가 150일·200일 이동평균선 위</li><li>150일선이 200일선 위</li><li>200일선이 1개월(22거래일) 전보다 높음</li>
 <li>50일선이 150일·200일선 위</li><li>주가가 50일선 위</li><li>주가가 52주 최저가보다 30% 이상 높음</li>
 <li>주가가 52주 최고가에서 25% 이내</li><li>RS 70 이상: 3·6·9·12개월 수익률(3개월 2배 가중)을 같은 시장 안에서 백분위로 매긴 값</li></ol>
-<p>VCP 후보: 8개 조건 충족 + 최근 6개월 고점 이후 조정폭이 2번 이상 차례로 작아짐(첫 조정 35% 이하, 마지막 12% 이하) + 최근 10일 거래량이 50일 평균보다 적음 + 피벗(직전 고점)까지 8% 이내.</p>
-<p>베이스 패턴 (모양은 주봉, 손잡이·피벗은 일봉): <b>컵앤핸들</b> 30% 이상 오른 뒤 12~35% 깊이·6~65주의 U자 컵, 오른쪽이 왼쪽 고점 90% 이상 회복, 1~4주·12% 이내 손잡이가 컵 위쪽 절반에 형성(손잡이 전이면 '컵 형성'). <b>플랫 베이스</b> 20% 이상 오른 뒤 5주 이상 고저 폭 15% 이내. <b>이중 바닥</b> 30% 이상 오른 뒤 12~40% 깊이·7주 이상, 두 번째 바닥이 첫 바닥을 8% 이내로 살짝 깨고 반등, 피벗은 W 가운데 고점. <b>하이 타이트 플래그</b> 8주 안에 90% 이상 급등 후 3~25일간 25% 이내 조정. 피벗 근처(아래 15% ~ 돌파 후 5%)인 경우만 표시합니다. 규칙으로 찾은 근사치이니 최종 판단은 차트로 하세요.</p>
+<p>VCP 후보: 8개 조건 충족 + RS 85 이상 + 최근 6개월 고점 이후 조정폭이 2번 이상 차례로 작아짐(첫 조정 35% 이하, 마지막 12% 이하) + 최근 10일 거래량이 50일 평균보다 적음 + 피벗(직전 고점)까지 8% 이내.</p>
+<p>베이스 패턴 (모양은 주봉, 손잡이·피벗은 일봉): <b>컵앤핸들</b> 30% 이상 오른 뒤 12~35% 깊이·6~65주의 U자 컵, 오른쪽이 왼쪽 고점 90% 이상 회복, 1~4주·12% 이내 손잡이가 컵 위쪽 절반에 형성(손잡이 전이면 '컵 형성'). <b>플랫 베이스</b> 20% 이상 오른 뒤 5주 이상 고저 폭 15% 이내. <b>이중 바닥</b> 30% 이상 오른 뒤 12~40% 깊이·7주 이상, 두 번째 바닥이 첫 바닥을 8% 이내로 살짝 깨고 반등, 피벗은 W 가운데 고점. <b>하이 타이트 플래그</b> 8주 안에 90% 이상 급등 후 3~25일간 25% 이내 조정. 8개 조건을 충족하고 RS 85 이상이면서 피벗 근처(아래 15% ~ 돌파 후 5%)인 경우만 후보로 표시합니다. 규칙으로 찾은 근사치이니 최종 판단은 차트로 하세요.</p>
 <p>가격: 한국은 KRX 공식 종가, 미국은 정규장 종가입니다(시간외 거래 제외). 장중에 스캔하면 15~20분 지연된 장중 시세로 계산하고 화면에 '장중 시세'로 표시합니다. 한국 종목명·시장 구분은 KRX 공식 상장 목록을 씁니다.</p>
 <p>스캔 대상: 한국은 시가총액 3,000억 원 이상 보통주(우선주·스팩 제외), 미국은 시가총액 20억 달러·주가 10달러·3개월 평균 거래량 20만 주 이상인 NYSE·NASDAQ 상장 주식. 표에는 8개 모두 충족한 종목과, 7개 충족하면서 RS 80 이상인 종목을 담습니다. 시세 출처: Yahoo Finance.</p>
 <p>매매 추천이 아니라 차트를 직접 확인할 후보를 좁히는 도구입니다.</p></details>
@@ -668,7 +673,7 @@ function render(){
  const h=hist(m),prevH=h.length>1?h[h.length-2]:null,dPass=prevH?S.pass-prevH.pass:null,ch=changes(m);
  const nIn=ch?ch.filter(c=>c.change==='진입').length:null,nOut=ch?ch.filter(c=>c.change==='이탈').length:null;
  const vc=M.rows.filter(r=>r.vcp).sort((a,b)=>a.toPivot-b.toPivot);
- const pt=M.rows.filter(r=>r.score===8&&r.pattern&&r.pattern!=='컵 형성').sort((a,b)=>Math.abs(a.patPivot)-Math.abs(b.patPivot));
+ const PR=S.patRs??85;const pt=M.rows.filter(r=>r.score===8&&r.rs>=PR&&r.pattern&&r.pattern!=='컵 형성').sort((a,b)=>Math.abs(a.patPivot)-Math.abs(b.patPivot));
  v.innerHTML=`<div class="grid4">
  <div class="card"><div class="lbl">8개 조건 모두 충족</div><div class="big">${fmt(S.pass)}</div><div class="sub ${dPass>0?'up':dPass<0?'down':''}">${dPass==null?'직전 스캔 없음':'직전 대비 '+(dPass>0?'+':'')+dPass}</div></div>
  <div class="card"><div class="lbl">VCP 후보</div><div class="big">${fmt(S.vcp)}</div><div class="sub">돌파 지점 근처의 수축 패턴</div></div>
@@ -677,12 +682,12 @@ function render(){
  <div class="card"><div class="lbl">1개 조건만 부족</div><div class="big">${fmt(S.near)}</div><div class="sub">관찰 대상</div></div></div>
  <p class="meta" style="margin-top:10px">기준일 ${esc(S.asOf)} ${S.intraday?'<b class="down">장중 시세</b>(15~20분 지연, 장 마감 후 스캔에서 종가로 바뀜)':m==='kr'?'종가(KRX 공식 종가)':'정규장 종가(시간외 거래 제외)'} · 스캔 대상 ${fmt(S.universe)}종목 중 ${fmt(S.analyzed)}종목 분석${S.missing>S.universe*0.05?` · <span class="down">시세를 못 받은 종목 ${fmt(S.missing)}개</span>`:''}</p>
  <div class="grid2">
- <div class="card"><h2>VCP 후보</h2><p class="note">조정폭이 점점 줄고 거래량이 마르며 피벗에 다가선 종목. 피벗 돌파와 거래량 급증을 확인하세요.</p>
-  <div class="scroll short">${vc.length?`<table><thead><tr><th>종목</th><th>수축 단계(%)</th><th class="num">피벗까지</th><th class="num hide-sm">거래량 10/50일</th><th>최근 6개월</th></tr></thead><tbody>${vc.map(r=>`<tr>${nameCell(m,r)}<td>${esc(r.vcpDepths.split('/').join(' → '))}</td><td class="num">${pct(r.toPivot)}</td><td class="num hide-sm">${r.dryUp?.toFixed(2)??'—'}</td><td>${spark(r.spark)}</td></tr>`).join('')}</tbody></table>`:'<p class="empty">오늘은 조건에 맞는 VCP 후보가 없습니다.</p>'}</div></div>
+ <div class="card"><h2>VCP 후보</h2><p class="note">RS ${PR} 이상 중 조정폭이 점점 줄고 거래량이 마르며 피벗에 다가선 종목. 피벗 돌파와 거래량 급증을 확인하세요.</p>
+  <div class="scroll short">${vc.length?`<table><thead><tr><th>종목</th><th>수축 단계(%)</th><th class="num">RS</th><th class="num">피벗까지</th><th class="num hide-sm">거래량 10/50일</th><th>최근 6개월</th></tr></thead><tbody>${vc.map(r=>`<tr>${nameCell(m,r)}<td>${esc(r.vcpDepths.split('/').join(' → '))}</td><td class="num">${r.rs}</td><td class="num">${pct(r.toPivot)}</td><td class="num hide-sm">${r.dryUp?.toFixed(2)??'—'}</td><td>${spark(r.spark)}</td></tr>`).join('')}</tbody></table>`:'<p class="empty">오늘은 조건에 맞는 VCP 후보가 없습니다.</p>'}</div></div>
  <div class="card"><h2>신규 진입 · 이탈</h2><p class="note">직전 거래일 스캔과 비교해 8개 조건을 새로 모두 충족했거나 더는 충족하지 않는 종목.</p>
   <div class="scroll short">${!ch?'<p class="empty">비교할 직전 거래일 결과가 아직 없습니다. 다음 거래일 스캔부터 표시됩니다.</p>':ch.length?`<table><thead><tr><th>구분</th><th>종목</th><th class="num">충족</th><th class="num">RS</th></tr></thead><tbody>${ch.map(r=>`<tr><td><span class="pill ${r.change==='진입'?'in':'out'}">${r.change}</span></td>${nameCell(m,r)}<td class="num">${r.score==null?'6개 이하':r.score+'/8'}</td><td class="num">${r.rs??'—'}</td></tr>`).join('')}</tbody></table>`:'<p class="empty">직전 스캔과 달라진 종목이 없습니다.</p>'}</div></div></div>
- <div class="card" style="margin-top:12px"><h2>베이스 패턴 후보</h2><p class="note">8개 조건을 충족하면서 피벗 근처(아래 15% ~ 돌파 후 5%)에 있는 베이스. 모양은 주봉, 손잡이·피벗은 일봉으로 판별했습니다. 피벗에 가까운 순.</p>
-  <div class="scroll short">${pt.length?`<table><thead><tr><th>종목</th><th>패턴</th><th class="hide-sm">내용</th><th class="num">피벗까지</th><th>최근 6개월</th></tr></thead><tbody>${pt.map(r=>`<tr>${nameCell(m,r)}<td>${pills(r.pattern)}</td><td class="hide-sm" style="white-space:normal">${esc(r.patNote)}</td><td class="num">${pct(r.patPivot)}</td><td>${spark(r.spark)}</td></tr>`).join('')}</tbody></table>`:'<p class="empty">오늘은 피벗 근처의 베이스 패턴이 없습니다.</p>'}</div></div>
+ <div class="card" style="margin-top:12px"><h2>베이스 패턴 후보</h2><p class="note">8개 조건 충족, RS ${PR} 이상이면서 피벗 근처(아래 15% ~ 돌파 후 5%)에 있는 베이스. 모양은 주봉, 손잡이·피벗은 일봉으로 판별했습니다. 피벗에 가까운 순.</p>
+  <div class="scroll short">${pt.length?`<table><thead><tr><th>종목</th><th>패턴</th><th class="hide-sm">내용</th><th class="num">RS</th><th class="num">피벗까지</th><th>최근 6개월</th></tr></thead><tbody>${pt.map(r=>`<tr>${nameCell(m,r)}<td>${pills(r.pattern)}</td><td class="hide-sm" style="white-space:normal">${esc(r.patNote)}</td><td class="num">${r.rs}</td><td class="num">${pct(r.patPivot)}</td><td>${spark(r.spark)}</td></tr>`).join('')}</tbody></table>`:'<p class="empty">오늘은 피벗 근처의 베이스 패턴이 없습니다.</p>'}</div></div>
  <div class="card" style="margin-top:12px"><div class="controls"><h2>전체 후보</h2><div class="controls">
   <select id="f"><option value="8">8개 모두 충족</option><option value="7">7개 이상 충족</option><option value="vcp">VCP 후보만</option><option value="pat">베이스 패턴만</option></select>
   <input id="q" type="search" placeholder="종목명·코드 검색"></div></div>
@@ -697,7 +702,7 @@ function render(){
  document.querySelectorAll('#main th.sortable').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(st[m].sort===k)st[m].dir*=-1;else{st[m].sort=k;st[m].dir=k==='n'?1:-1;}table();});
  table();}
 function table(){const m=st.m,o=st[m];let rows=D[m].rows.slice();
- if(o.f==='8')rows=rows.filter(r=>r.score===8);if(o.f==='vcp')rows=rows.filter(r=>r.vcp);if(o.f==='pat')rows=rows.filter(r=>r.pattern);
+ if(o.f==='8')rows=rows.filter(r=>r.score===8);if(o.f==='vcp')rows=rows.filter(r=>r.vcp);if(o.f==='pat')rows=rows.filter(r=>r.pattern&&r.pattern!=='컵 형성'&&r.score===8&&r.rs>=(D[m].summary.patRs??85));
  if(o.q)rows=rows.filter(r=>(r.n+' '+r.s).toLowerCase().includes(o.q));
  rows.sort((a,b)=>o.sort==='n'?o.dir*a.n.localeCompare(b.n,'ko'):(o.dir*((a[o.sort]??-1e9)-(b[o.sort]??-1e9))||b.rs-a.rs));
  document.querySelectorAll('#main th.sortable').forEach(th=>th.setAttribute('aria-sort',th.dataset.k===o.sort?(o.dir>0?'ascending':'descending'):'none'));
