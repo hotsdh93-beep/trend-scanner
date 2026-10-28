@@ -250,5 +250,20 @@
 "patRs": 85,
 "seconds": 137,
 "intraday": false
+},
+{
+"market": "kr",
+"asOf": "2026-10-28",
+"scannedAt": "2026-10-28T18:31:28+09:00",
+"universe": 637,
+"analyzed": 622,
+"missing": 0,
+"pass": 29,
+"near": 29,
+"vcp": 0,
+"patterns": 2,
+"patRs": 85,
+"seconds": 51,
+"intraday": false
 }
 ]
