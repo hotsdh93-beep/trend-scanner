@@ -505,5 +505,20 @@
 "patRs": 85,
 "seconds": 24,
 "intraday": false
+},
+{
+"market": "us",
+"asOf": "2026-11-09",
+"scannedAt": "2026-11-10T08:05:38+09:00",
+"universe": 1836,
+"analyzed": 1792,
+"missing": 0,
+"pass": 293,
+"near": 212,
+"vcp": 11,
+"patterns": 29,
+"patRs": 85,
+"seconds": 123,
+"intraday": false
 }
 ]
