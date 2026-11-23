@@ -134,7 +134,9 @@ def krx_listing():
             df = pd.read_csv(io.BytesIO(raw), dtype={"Code": str}, index_col=0)
         except Exception:
             continue
-        if len(df) > 1000:
+        # 장 시작 전에 만들어진 그날 파일은 시가총액·종가가 비어 있을 수 있음 → 값이 채워진 가장 최근 파일을 쓴다
+        filled = (pd.to_numeric(df.get("Marcap"), errors="coerce").fillna(0) > 0) & (pd.to_numeric(df.get("Close"), errors="coerce").fillna(0) > 0)
+        if len(df) > 1000 and int(filled.sum()) > 1000:
             df["date"] = d
             return df
     return None
