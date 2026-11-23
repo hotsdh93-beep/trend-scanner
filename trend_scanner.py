@@ -55,14 +55,23 @@ def load_config():
         return
     if c.get("kr_min_cap_eok"):
         SETTINGS["kr"]["min_cap"] = float(c["kr_min_cap_eok"]) * 1e8      # 억 원
-    global PATTERN_RS_MIN
+    global PATTERN_RS_MIN, RS_MIN, MAX_FROM_HIGH, MAX_ABOVE_50, EPS_GROWTH_MIN, REV_GROWTH_MIN
     if c.get("pattern_rs_min"):
         PATTERN_RS_MIN = int(c["pattern_rs_min"])
+    RS_MIN = int(c.get("rs_min", RS_MIN))
+    MAX_FROM_HIGH = float(c.get("max_from_high", MAX_FROM_HIGH))
+    MAX_ABOVE_50 = float(c.get("max_above_50", MAX_ABOVE_50))
+    EPS_GROWTH_MIN = float(c.get("eps_growth_min", EPS_GROWTH_MIN))
+    REV_GROWTH_MIN = float(c.get("rev_growth_min", REV_GROWTH_MIN))
     if c.get("us_min_cap_eok_usd"):
         SETTINGS["us"]["min_cap"] = float(c["us_min_cap_eok_usd"]) * 1e8  # 억 달러
 
 
-RS_MIN = 70            # 8번째 조건: RS 70 이상
+RS_MIN = 80            # 8번째 조건: RS 80 이상 (config.json의 rs_min)
+MAX_FROM_HIGH = 15     # 가격 위치: 52주 고점에서 15% 이내 (max_from_high)
+MAX_ABOVE_50 = 25      # 가격 위치: 50일선보다 25% 넘게 오르면 과열로 제외 (max_above_50)
+EPS_GROWTH_MIN = 25    # 실적: 최근 분기 순이익 전년 동기 대비 +25% 이상 (eps_growth_min)
+REV_GROWTH_MIN = 20    # 실적: 최근 분기 매출 전년 동기 대비 +20% 이상 (rev_growth_min)
 KEEP_NEAR_RS = 80      # 7개 충족 종목은 RS 80 이상만 결과표에 남김
 PATTERN_RS_MIN = 85    # VCP·베이스 패턴 후보는 RS 85 이상만 (config.json의 pattern_rs_min으로 변경)
 BATCH = 80             # 한 번에 내려받을 종목 수
@@ -491,6 +500,47 @@ def _r(x, n=1):
     return None if x is None or (isinstance(x, float) and not math.isfinite(x)) else round(float(x), n)
 
 
+def fetch_fundamentals(symbols, budget=420):
+    """8개 조건 통과 종목의 최근 분기 실적 성장률(전년 동기 대비)을 Yahoo에서 받는다. 7일간 캐시."""
+    from concurrent.futures import ThreadPoolExecutor
+    path = DATA / "fundamentals.json"
+    cache = _load(path, {})
+    fresh = (dt.date.today() - dt.timedelta(days=7)).isoformat()
+    need = [s for s in symbols if not (s in cache and cache[s].get("at", "") >= fresh)]
+    until = time.time() + budget
+
+    def one(sym):
+        for attempt in range(2):
+            if time.time() > until:
+                return sym, None
+            try:
+                info = yf.Ticker(sym).info or {}
+                g = lambda k: (round(float(info[k]) * 100, 1) if isinstance(info.get(k), (int, float)) and math.isfinite(info[k]) else None)
+                return sym, {"eps": g("earningsQuarterlyGrowth"), "rev": g("revenueGrowth"), "at": dt.date.today().isoformat()}
+            except Exception:
+                time.sleep(2 * (attempt + 1))
+        return sym, None
+
+    if need:
+        log.info("실적 조회 %d종목 (캐시 %d종목)", len(need), len(symbols) - len(need))
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for sym, v in ex.map(one, need):
+                if v:
+                    cache[sym] = v
+        DATA.mkdir(exist_ok=True)
+        path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    return cache
+
+
+def grade_of(r):
+    """A: 8개 조건 + 가격 위치 + 실적 / B: 8개 조건 + 가격 위치 / C: 8개 조건만"""
+    if r["score"] != 8:
+        return ""
+    pos_ok = r["fromHi"] is not None and r["fromHi"] >= -MAX_FROM_HIGH and r["vs50"] is not None and r["vs50"] <= MAX_ABOVE_50
+    earn_ok = r.get("eps") is not None and r.get("rev") is not None and r["eps"] >= EPS_GROWTH_MIN and r["rev"] >= REV_GROWTH_MIN
+    return "A" if pos_ok and earn_ok else "B" if pos_ok else "C"
+
+
 def scan(market):
     t0 = time.time()
     log.info("[%s] 스캔 시작", market)
@@ -531,13 +581,22 @@ def scan(market):
             "vcpDepths": "/".join(f"{d:g}" for d in v["depths"]), "toPivot": _r(v["toPivot"]), "dryUp": _r(v["dryUp"], 2),
             "spark": a["spark"],
         })
-    rows.sort(key=lambda r: (-r["score"], -r["rs"]))
+    fund = fetch_fundamentals([r["s"] for r in rows if r["score"] == 8])
+    for r in rows:
+        f = fund.get(r["s"]) or {}
+        r["eps"], r["rev"] = f.get("eps"), f.get("rev")
+        r["grade"] = grade_of(r)
+    order = {"A": 0, "B": 1, "C": 2, "": 3}
+    rows.sort(key=lambda r: (order[r["grade"]], -r["score"], -r["rs"]))
     summary = {
         "market": market, "asOf": as_of, "scannedAt": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "universe": len(uni), "analyzed": len(valid), "missing": len([u for u in uni if u["s"] not in prices]),
         "pass": int(sum(r["score"] == 8 for r in rows)), "near": int(near_all), "vcp": int(sum(r["vcp"] for r in rows)),
         "patterns": int(sum(1 for r in rows if r["score"] == 8 and r["rs"] >= PATTERN_RS_MIN and r["pattern"] and r["pattern"] != "컵 형성")),
         "patRs": PATTERN_RS_MIN,
+        "gradeA": int(sum(r["grade"] == "A" for r in rows)), "gradeB": int(sum(r["grade"] == "B" for r in rows)),
+        "rsMin": RS_MIN, "maxFromHigh": MAX_FROM_HIGH, "maxAbove50": MAX_ABOVE_50,
+        "epsMin": EPS_GROWTH_MIN, "revMin": REV_GROWTH_MIN,
         "seconds": round(time.time() - t0),
         "intraday": bool(as_of and market_open_now(market, as_of)),
     }
@@ -622,6 +681,8 @@ td.name{white-space:normal;min-width:120px}td.name a{color:var(--fg);text-decora
 .code{font-size:11px;color:var(--muted)}
 .dots{display:inline-flex;gap:2px}.dot{width:7px;height:7px;border-radius:2px;background:var(--up)}.dot.off{background:transparent;box-shadow:inset 0 0 0 1.5px var(--down)}
 .pill{display:inline-block;padding:0 8px;border-radius:99px;font-size:12px;border:1px solid currentColor}
+.grade{display:inline-block;min-width:20px;text-align:center;padding:0 6px;border-radius:5px;font-size:11px;font-weight:700;margin-left:6px;vertical-align:1px}
+.grade.A{background:var(--up);color:#fff}.grade.B{background:var(--chip);color:var(--fg);box-shadow:inset 0 0 0 1px var(--line)}.grade.C{color:var(--muted);box-shadow:inset 0 0 0 1px var(--line)}
 .pill.in{color:var(--up)}.pill.pat{color:#b06a00}@media (prefers-color-scheme:dark){.pill.pat{color:#f0a64a}}.pill{margin:1px 0}.pill.out{color:var(--down)}.pill.vcp{color:var(--accent)}
 .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
 select,input{font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
@@ -639,7 +700,8 @@ details li{margin:3px 0}svg text{fill:var(--muted);font-size:11px}
 <details><summary>스캔 기준</summary><ol>
 <li>주가가 150일·200일 이동평균선 위</li><li>150일선이 200일선 위</li><li>200일선이 1개월(22거래일) 전보다 높음</li>
 <li>50일선이 150일·200일선 위</li><li>주가가 50일선 위</li><li>주가가 52주 최저가보다 30% 이상 높음</li>
-<li>주가가 52주 최고가에서 25% 이내</li><li>RS 70 이상: 3·6·9·12개월 수익률(3개월 2배 가중)을 같은 시장 안에서 백분위로 매긴 값</li></ol>
+<li>주가가 52주 최고가에서 25% 이내</li><li>RS 80 이상(기본값, 설정에서 변경): 3·6·9·12개월 수익률(3개월 2배 가중)을 같은 시장 안에서 백분위로 매긴 값</li></ol>
+<p>등급: <b>A</b> 8개 조건 + 가격 위치(52주 고점에서 15% 이내, 50일선 대비 +25% 이하) + 실적(최근 분기 순이익 +25% 이상, 매출 +20% 이상, 전년 같은 분기 대비). <b>B</b> 8개 조건 + 가격 위치(실적 미달이거나 실적 데이터 없음). <b>C</b> 8개 조건만 충족(고점에서 멀거나 과열). 실적은 Yahoo Finance 기준이며, 한국 종목은 실적 데이터가 없는 경우가 있습니다. 수치는 config.json에서 바꿀 수 있습니다.</p>
 <p>VCP 후보: 8개 조건 충족 + RS 85 이상 + 최근 6개월 고점 이후 조정폭이 2번 이상 차례로 작아짐(첫 조정 35% 이하, 마지막 12% 이하) + 최근 10일 거래량이 50일 평균보다 적음 + 피벗(직전 고점)까지 8% 이내.</p>
 <p>베이스 패턴 (모양은 주봉, 손잡이·피벗은 일봉): <b>컵앤핸들</b> 30% 이상 오른 뒤 12~35% 깊이·6~65주의 U자 컵, 오른쪽이 왼쪽 고점 90% 이상 회복, 1~4주·12% 이내 손잡이가 컵 위쪽 절반에 형성(손잡이 전이면 '컵 형성'). <b>플랫 베이스</b> 20% 이상 오른 뒤 5주 이상 고저 폭 15% 이내. <b>이중 바닥</b> 30% 이상 오른 뒤 12~40% 깊이·7주 이상, 두 번째 바닥이 첫 바닥을 8% 이내로 살짝 깨고 반등, 피벗은 W 가운데 고점. <b>하이 타이트 플래그</b> 8주 안에 90% 이상 급등 후 3~25일간 25% 이내 조정. 8개 조건을 충족하고 RS 85 이상이면서 피벗 근처(아래 15% ~ 돌파 후 5%)인 경우만 후보로 표시합니다. 규칙으로 찾은 근사치이니 최종 판단은 차트로 하세요.</p>
 <p>가격: 한국은 KRX 공식 종가, 미국은 정규장 종가입니다(시간외 거래 제외). 장중에 스캔하면 15~20분 지연된 장중 시세로 계산하고 화면에 '장중 시세'로 표시합니다. 한국 종목명·시장 구분은 KRX 공식 상장 목록을 씁니다.</p>
@@ -656,11 +718,11 @@ const pct=(v,d=1)=>v==null?'—':(v>0?'+':'')+Number(v).toFixed(d)+'%';
 const price=(m,v)=>v==null?'—':m==='kr'?Math.round(v).toLocaleString('ko-KR'):'$'+Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const code=s=>s.replace(/\.(KS|KQ)$/,'');
 const link=(m,s)=>m==='kr'?'https://finance.naver.com/item/fchart.naver?code='+code(s):'https://finance.yahoo.com/quote/'+encodeURIComponent(s)+'/chart';
-const st={m:'kr',kr:{sort:'rs',dir:-1,f:'8',q:''},us:{sort:'rs',dir:-1,f:'8',q:''}};
+const st={m:'kr',kr:{sort:'grade',dir:1,f:'A',q:''},us:{sort:'grade',dir:1,f:'A',q:''}};
 function spark(v){if(!v||v.length<2)return'';const w=96,h=26,p=3,x=i=>p+i*(w-2*p)/(v.length-1),y=t=>h-p-t/100*(h-2*p);
  const c=v[v.length-1]>=v[0]?'var(--up)':'var(--down)';return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><path d="${v.map((t,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(t).toFixed(1)).join('')}" fill="none" stroke="${c}" stroke-width="1.5" stroke-linejoin="round"/><circle cx="${x(v.length-1)}" cy="${y(v[v.length-1])}" r="2.2" fill="${c}"/></svg>`;}
 function pills(t){return t?t.split(' · ').map(x=>`<span class="pill ${x==='컵 형성'?'':'pat'}">${esc(x)}</span>`).join(' '):'';}
-function nameCell(m,r){const ex=m==='kr'?(r.ex==='KSC'?' · 코스피':' · 코스닥'):'';return `<td class="name"><a href="${link(m,r.s)}" target="_blank" rel="noopener">${esc(r.n)}</a><div class="code">${esc(code(r.s))}${ex}</div></td>`;}
+function nameCell(m,r){const ex=m==='kr'?(r.ex==='KSC'?' · 코스피':' · 코스닥'):'';return `<td class="name"><a href="${link(m,r.s)}" target="_blank" rel="noopener">${esc(r.n)}</a>${r.grade?`<span class="grade ${r.grade}" title="${r.grade}등급">${r.grade}</span>`:''}<div class="code">${esc(code(r.s))}${ex}</div></td>`;}
 function changes(m){const M=D[m];if(!M.prev)return null;const was=new Map(M.prev.filter(r=>r.score===8).map(r=>[r.s,r]));const now=new Map(M.rows.map(r=>[r.s,r]));const out=[];
  for(const r of M.rows)if(r.score===8&&!was.has(r.s))out.push({...r,change:'진입'});
  for(const [s,r] of was){const c=now.get(s);if(!c||c.score<8)out.push({s,n:r.n,ex:c?.ex,change:'이탈',score:c?c.score:null,rs:c?c.rs:null});}
@@ -675,11 +737,12 @@ function render(){
  const vc=M.rows.filter(r=>r.vcp).sort((a,b)=>a.toPivot-b.toPivot);
  const PR=S.patRs??85;const pt=M.rows.filter(r=>r.score===8&&r.rs>=PR&&r.pattern&&r.pattern!=='컵 형성').sort((a,b)=>Math.abs(a.patPivot)-Math.abs(b.patPivot));
  v.innerHTML=`<div class="grid4">
+ <div class="card"><div class="lbl">A등급 (핵심 후보)</div><div class="big">${fmt(S.gradeA??0)}</div><div class="sub">차트·가격 위치·실적 모두 충족 · B등급 ${fmt(S.gradeB??0)}</div></div>
  <div class="card"><div class="lbl">8개 조건 모두 충족</div><div class="big">${fmt(S.pass)}</div><div class="sub ${dPass>0?'up':dPass<0?'down':''}">${dPass==null?'직전 스캔 없음':'직전 대비 '+(dPass>0?'+':'')+dPass}</div></div>
  <div class="card"><div class="lbl">VCP 후보</div><div class="big">${fmt(S.vcp)}</div><div class="sub">돌파 지점 근처의 수축 패턴</div></div>
  <div class="card"><div class="lbl">베이스 패턴</div><div class="big">${fmt(S.patterns??pt.length)}</div><div class="sub">피벗 근처의 컵·플랫·W·플래그</div></div>
  <div class="card"><div class="lbl">신규 진입</div><div class="big">${nIn==null?'—':fmt(nIn)}</div><div class="sub ${nOut>0?'down':''}">${nOut==null?'비교할 직전 스캔 없음':'이탈 '+nOut}</div></div>
- <div class="card"><div class="lbl">1개 조건만 부족</div><div class="big">${fmt(S.near)}</div><div class="sub">관찰 대상</div></div></div>
+ </div>
  <p class="meta" style="margin-top:10px">기준일 ${esc(S.asOf)} ${S.intraday?'<b class="down">장중 시세</b>(15~20분 지연, 장 마감 후 스캔에서 종가로 바뀜)':m==='kr'?'종가(KRX 공식 종가)':'정규장 종가(시간외 거래 제외)'} · 스캔 대상 ${fmt(S.universe)}종목 중 ${fmt(S.analyzed)}종목 분석${S.missing>S.universe*0.05?` · <span class="down">시세를 못 받은 종목 ${fmt(S.missing)}개</span>`:''}</p>
  <div class="grid2">
  <div class="card"><h2>VCP 후보</h2><p class="note">RS ${PR} 이상 중 조정폭이 점점 줄고 거래량이 마르며 피벗에 다가선 종목. 피벗 돌파와 거래량 급증을 확인하세요.</p>
@@ -689,11 +752,11 @@ function render(){
  <div class="card" style="margin-top:12px"><h2>베이스 패턴 후보</h2><p class="note">8개 조건 충족, RS ${PR} 이상이면서 피벗 근처(아래 15% ~ 돌파 후 5%)에 있는 베이스. 모양은 주봉, 손잡이·피벗은 일봉으로 판별했습니다. 피벗에 가까운 순.</p>
   <div class="scroll short">${pt.length?`<table><thead><tr><th>종목</th><th>패턴</th><th class="hide-sm">내용</th><th class="num">RS</th><th class="num">피벗까지</th><th>최근 6개월</th></tr></thead><tbody>${pt.map(r=>`<tr>${nameCell(m,r)}<td>${pills(r.pattern)}</td><td class="hide-sm" style="white-space:normal">${esc(r.patNote)}</td><td class="num">${r.rs}</td><td class="num">${pct(r.patPivot)}</td><td>${spark(r.spark)}</td></tr>`).join('')}</tbody></table>`:'<p class="empty">오늘은 피벗 근처의 베이스 패턴이 없습니다.</p>'}</div></div>
  <div class="card" style="margin-top:12px"><div class="controls"><h2>전체 후보</h2><div class="controls">
-  <select id="f"><option value="8">8개 모두 충족</option><option value="7">7개 이상 충족</option><option value="vcp">VCP 후보만</option><option value="pat">베이스 패턴만</option></select>
+  <select id="f"><option value="A">A등급 (핵심 후보)</option><option value="AB">A·B등급</option><option value="8">8개 모두 충족</option><option value="7">7개 이상 충족</option><option value="vcp">VCP 후보만</option><option value="pat">베이스 패턴만</option></select>
   <input id="q" type="search" placeholder="종목명·코드 검색"></div></div>
-  <p class="note">조건 칸의 네모 8개는 아래 "스캔 기준" 순서입니다. 빈 네모가 미충족 조건. 종목명을 누르면 차트가 열립니다.</p>
+  <p class="note"><b>A</b> 8개 조건 + 가격 위치(고점 ${S.maxFromHigh??15}% 이내, 50일선 +${S.maxAbove50??25}% 이하) + 실적(이익 +${S.epsMin??25}%, 매출 +${S.revMin??20}% 이상) · <b>B</b> 8개 조건 + 가격 위치 · <b>C</b> 8개 조건만. 이익·매출 성장은 최근 분기의 전년 같은 분기 대비입니다. 조건 칸의 네모 8개는 아래 "스캔 기준" 순서입니다. 빈 네모가 미충족 조건. 종목명을 누르면 차트가 열립니다.</p>
   <div class="scroll"><table id="main"><thead><tr>
-  <th class="sortable" data-k="n">종목</th><th class="sortable num" data-k="p">종가</th><th class="sortable num" data-k="chg">등락</th><th class="sortable num" data-k="rs">RS</th>
+  <th class="sortable" data-k="grade">등급·종목</th><th class="sortable num" data-k="p">종가</th><th class="sortable num" data-k="chg">등락</th><th class="sortable num" data-k="rs">RS</th><th class="sortable num" data-k="eps" title="최근 분기 순이익·매출, 전년 같은 분기 대비">이익 성장</th><th class="sortable num hide-sm" data-k="rev">매출 성장</th>
   <th class="sortable" data-k="score">조건</th><th class="sortable num" data-k="fromHi">고점 대비</th><th class="sortable num hide-sm" data-k="vs50">50일선 대비</th>
   <th class="sortable num hide-sm" data-k="volRatio">거래량 10/50일</th><th class="sortable" data-k="vcp">VCP·패턴</th><th class="hide-sm">최근 6개월</th></tr></thead><tbody></tbody></table>
   <p class="empty" id="none" hidden>조건에 맞는 종목이 없습니다.</p></div></div>`;
@@ -701,13 +764,15 @@ function render(){
  f.onchange=()=>{st[m].f=f.value;table();};q.oninput=()=>{st[m].q=q.value.trim().toLowerCase();table();};
  document.querySelectorAll('#main th.sortable').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(st[m].sort===k)st[m].dir*=-1;else{st[m].sort=k;st[m].dir=k==='n'?1:-1;}table();});
  table();}
-function table(){const m=st.m,o=st[m];let rows=D[m].rows.slice();
- if(o.f==='8')rows=rows.filter(r=>r.score===8);if(o.f==='vcp')rows=rows.filter(r=>r.vcp);if(o.f==='pat')rows=rows.filter(r=>r.pattern&&r.pattern!=='컵 형성'&&r.score===8&&r.rs>=(D[m].summary.patRs??85));
+function egood(v,min){return v==null?'':v>=min?'up':v<0?'down':'';}
+function table(){const m=st.m,o=st[m],S2=Object.assign({epsMin:25,revMin:20},D[m].summary);let rows=D[m].rows.slice();
+ if(o.f==='A')rows=rows.filter(r=>r.grade==='A');if(o.f==='AB')rows=rows.filter(r=>r.grade==='A'||r.grade==='B');if(o.f==='8')rows=rows.filter(r=>r.score===8);if(o.f==='vcp')rows=rows.filter(r=>r.vcp);if(o.f==='pat')rows=rows.filter(r=>r.pattern&&r.pattern!=='컵 형성'&&r.score===8&&r.rs>=(D[m].summary.patRs??85));
  if(o.q)rows=rows.filter(r=>(r.n+' '+r.s).toLowerCase().includes(o.q));
- rows.sort((a,b)=>o.sort==='n'?o.dir*a.n.localeCompare(b.n,'ko'):(o.dir*((a[o.sort]??-1e9)-(b[o.sort]??-1e9))||b.rs-a.rs));
+ const GO={A:0,B:1,C:2,'':3};
+ rows.sort((a,b)=>o.sort==='grade'?(o.dir*(GO[a.grade||'']-GO[b.grade||''])||b.rs-a.rs):o.sort==='n'?o.dir*a.n.localeCompare(b.n,'ko'):(o.dir*((a[o.sort]??-1e9)-(b[o.sort]??-1e9))||b.rs-a.rs));
  document.querySelectorAll('#main th.sortable').forEach(th=>th.setAttribute('aria-sort',th.dataset.k===o.sort?(o.dir>0?'ascending':'descending'):'none'));
  $('#none').hidden=rows.length>0;
- $('#main tbody').innerHTML=rows.map(r=>`<tr>${nameCell(m,r)}<td class="num">${price(m,r.p)}</td><td class="num ${r.chg>0?'up':r.chg<0?'down':''}">${pct(r.chg,2)}</td><td class="num">${r.rs}</td>
+ $('#main tbody').innerHTML=rows.map(r=>`<tr>${nameCell(m,r)}<td class="num">${price(m,r.p)}</td><td class="num ${r.chg>0?'up':r.chg<0?'down':''}">${pct(r.chg,2)}</td><td class="num">${r.rs}</td><td class="num ${egood(r.eps,S2.epsMin)}">${pct(r.eps,0)}</td><td class="num hide-sm ${egood(r.rev,S2.revMin)}">${pct(r.rev,0)}</td>
  <td><span class="dots" title="8개 중 ${r.score}개 충족">${[...r.crit].map((b,i)=>`<span class="dot${b==='1'?'':' off'}" title="조건 ${i+1}"></span>`).join('')}</span></td>
  <td class="num">${pct(r.fromHi)}</td><td class="num hide-sm">${pct(r.vs50)}</td><td class="num hide-sm">${r.volRatio?.toFixed(2)??'—'}</td>
  <td style="white-space:normal">${r.vcp?'<span class="pill vcp">VCP</span> ':''}${pills(r.pattern)}</td><td class="hide-sm">${spark(r.spark)}</td></tr>`).join('');}
@@ -723,8 +788,8 @@ function breadth(){const el=$('#breadth');const ser=['kr','us'].map((m,i)=>({m,c
   if(se.pts.length<40)s+=se.pts.map(p=>`<circle cx="${x(+p.d)}" cy="${y(p.v)}" r="3" fill="${se.c}"><title>${p.a} ${NAMES[se.m]} ${p.v}종목</title></circle>`).join('');
   const l=se.pts[se.pts.length-1];s+=`<text x="${x(+l.d)+8}" y="${y(l.v)+4}" style="fill:${se.c}">${NAMES[se.m]} ${l.v}</text>`;}
  el.innerHTML=s+'</svg>';}
-(function(){const parts=['kr','us'].filter(m=>D[m].summary).map(m=>`${NAMES[m]} ${fmt(D[m].summary.pass)}종목(VCP ${D[m].summary.vcp})`);
- $('#take').textContent=parts.length?parts.join(', ')+'이 트렌드 템플릿 8개 조건을 모두 충족합니다. VCP 후보부터 차트를 확인하세요.':'아직 스캔 결과가 없습니다.';
+(function(){const parts=['kr','us'].filter(m=>D[m].summary).map(m=>`${NAMES[m]} ${fmt(D[m].summary.gradeA??0)}종목`);
+ $('#take').textContent=parts.length?'A등급(차트·가격 위치·실적 모두 충족): '+parts.join(', ')+'. A등급과 VCP·베이스 패턴 후보부터 차트를 확인하세요.':'아직 스캔 결과가 없습니다.';
  $('#gen').textContent='화면 생성 '+D.generatedAt.replace('T',' ').slice(0,16);
  if(!D.kr.summary&&D.us.summary)st.m='us';
  document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{st.m=t.dataset.m;render();});
