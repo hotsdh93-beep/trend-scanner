@@ -749,7 +749,7 @@
 {
 "market": "kr",
 "asOf": "2026-11-23",
-"scannedAt": "2026-11-24T00:06:45+09:00",
+"scannedAt": "2026-11-24T05:38:16+09:00",
 "universe": 581,
 "analyzed": 572,
 "missing": 0,
@@ -765,7 +765,7 @@
 "maxAbove50": 25.0,
 "epsMin": 25.0,
 "revMin": 20.0,
-"seconds": 44,
+"seconds": 29,
 "intraday": false
 },
 {
