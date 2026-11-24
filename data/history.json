@@ -771,23 +771,23 @@
 {
 "market": "us",
 "asOf": "2026-11-23",
-"scannedAt": "2026-11-24T00:09:24+09:00",
-"universe": 1779,
-"analyzed": 1742,
+"scannedAt": "2026-11-24T15:12:10+09:00",
+"universe": 1781,
+"analyzed": 1745,
 "missing": 0,
-"pass": 193,
+"pass": 201,
 "near": 155,
 "vcp": 16,
-"patterns": 44,
+"patterns": 47,
 "patRs": 85,
 "gradeA": 17,
-"gradeB": 160,
+"gradeB": 162,
 "rsMin": 80,
 "maxFromHigh": 15.0,
 "maxAbove50": 25.0,
 "epsMin": 25.0,
 "revMin": 20.0,
-"seconds": 159,
-"intraday": true
+"seconds": 118,
+"intraday": false
 }
 ]
