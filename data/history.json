@@ -789,5 +789,27 @@
 "revMin": 20.0,
 "seconds": 118,
 "intraday": false
+},
+{
+"market": "kr",
+"asOf": "2026-11-24",
+"scannedAt": "2026-11-25T04:44:59+09:00",
+"universe": 595,
+"analyzed": 586,
+"missing": 0,
+"pass": 26,
+"near": 18,
+"vcp": 3,
+"patterns": 2,
+"patRs": 85,
+"gradeA": 2,
+"gradeB": 12,
+"rsMin": 80,
+"maxFromHigh": 15.0,
+"maxAbove50": 25.0,
+"epsMin": 25.0,
+"revMin": 20.0,
+"seconds": 31,
+"intraday": false
 }
 ]
