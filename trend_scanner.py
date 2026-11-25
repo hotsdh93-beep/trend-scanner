@@ -765,9 +765,16 @@ body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 "Pretendard","
 .stat .l{font-size:11.5px;color:var(--muted)}
 .stat.hl{border-color:var(--up)}.stat.hl .n{color:var(--up)}
 .meta{font-size:12px;color:var(--muted);margin:8px 2px 0}
-.cards{display:grid;gap:10px;grid-template-columns:1fr}
-@media (min-width:720px){.cards{grid-template-columns:1fr 1fr}.stats{grid-template-columns:repeat(4,minmax(0,160px))}}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;min-width:0}
+.cards{display:grid;gap:8px;grid-template-columns:1fr;align-items:start}
+@media (min-width:720px){.cards{max-width:780px}.stats{grid-template-columns:repeat(4,minmax(0,160px))}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;min-width:0}
+.card>summary{list-style:none;cursor:pointer;padding:12px 14px;-webkit-tap-highlight-color:transparent}
+.card>summary::-webkit-details-marker{display:none}
+.card .t{min-width:0}.card .rt{flex:none;text-align:right}
+.card .rt .q{font-size:13px;font-variant-numeric:tabular-nums;margin-top:5px;white-space:nowrap}
+.card .body{padding:4px 14px 14px;border-top:1px solid var(--line)}
+.card .nm::after{content:" ▾";color:var(--muted);font-size:12px;font-weight:400}.card[open] .nm::after{content:" ▴"}
+.card .go{display:inline-block;margin-top:10px;font-size:13.5px;color:var(--accent);text-decoration:none;font-weight:600}
 .card .hd{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
 .card .nm{font-size:16.5px;font-weight:700;line-height:1.3;color:var(--fg);text-decoration:none}
 .card .cd{font-size:12px;color:var(--muted)}
@@ -851,15 +858,15 @@ function changes(m){const M=D[m];if(!M.prev)return null;const was=new Map(M.prev
  return out.sort((a,b)=>a.change===b.change?(b.rs??0)-(a.rs??0):a.change==='진입'?-1:1);}
 function hist(m){return D.history.filter(h=>h.market===m);}
 function card(m,r){const v=r.view||{v:'관망',why:[]};
- return `<article class="card"><div class="hd"><div><a class="nm" href="${link(m,r.s)}" target="_blank" rel="noopener">${esc(r.n)}</a><div class="cd">${esc(code(r.s))} · ${esc(exName(m,r))}</div></div><span class="vd ${VC[v.v]||'watch'}">${esc(v.v)}</span></div>
- <div class="px"><span class="p">${price(m,r.p)}</span><span class="c ${r.chg>0?'up':r.chg<0?'down':''}">${pct(r.chg,2)}</span></div>
- ${spark(r.spark,true)}
+ const tp=r.patPivot??r.toPivot;
+ return `<details class="card"><summary class="hd"><div class="t"><span class="nm">${esc(r.n)}</span><div class="cd">${esc(code(r.s))} · RS ${r.rs}${v.base?' · '+esc(v.base):''}${v.pivot&&tp!=null?' · 피벗까지 '+pct(tp):''}</div></div><div class="rt"><span class="vd ${VC[v.v]||'watch'}">${esc(v.v)}</span><div class="q">${price(m,r.p)} <span class="${r.chg>0?'up':r.chg<0?'down':''}">${pct(r.chg,2)}</span></div></div></summary>
+ <div class="body">${spark(r.spark,true)}
  <div class="kv"><div><div class="k">RS</div><div class="v">${r.rs}</div></div><div><div class="k">이익 성장</div><div class="v up">${pct(r.eps,0)}</div></div><div><div class="k">매출 성장</div><div class="v up">${pct(r.rev,0)}</div></div>
  <div><div class="k">고점 대비</div><div class="v">${pct(r.fromHi)}</div></div><div><div class="k">50일선 대비</div><div class="v">${pct(r.vs50)}</div></div><div><div class="k">거래량 10/50일</div><div class="v">${r.volRatio?.toFixed(2)??'—'}</div></div></div>
  <div class="tags">${tags(r)}</div>
  <ul class="why">${(v.why||[]).map(w=>`<li>${esc(w)}</li>`).join('')}</ul>
  ${v.pivot?`<div class="lv"><span>피벗 <b>${price(m,v.pivot)}</b></span>${v.stop?`<span>손절 기준 <b class="down">${price(m,v.stop)}</b> (−7%)</span>`:''}</div>`:''}
- </article>`;}
+ <a class="go" href="${link(m,r.s)}" target="_blank" rel="noopener">차트 보기 ↗</a></div></details>`;}
 function row(m,r,right){return `<div class="row"><div class="t"><a href="${link(m,r.s)}" target="_blank" rel="noopener">${esc(r.n)}</a>${r.grade?`<span class="g ${r.grade}">${r.grade}</span>`:''}<div class="s">${esc(code(r.s))} · ${tags(r)||esc(exName(m,r))}</div></div>${spark(r.spark,false)}<div class="r">${right}</div></div>`;}
 function render(){
  document.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected',t.dataset.m===st.m));
@@ -876,7 +883,7 @@ function render(){
  <div class="stats"><div class="stat hl" data-go="A"><div class="n">${buy}</div><div class="l">매수 검토</div></div><div class="stat" data-go="A"><div class="n">${A.length}</div><div class="l">A등급</div></div><div class="stat" data-go="Bo"><div class="n">${fmt(S.gradeB??0)}</div><div class="l">B등급</div></div><div class="stat" data-go="8"><div class="n">${fmt(S.pass)}</div><div class="l">8개 조건${!dPass?'':` <span class="${dPass>0?'up':dPass<0?'down':''}">${dPass>0?'+':''}${dPass}</span>`}</div></div></div>
  <p class="meta">기준일 ${esc(S.asOf)} ${S.intraday?'<b class="down">장중 시세</b>':'종가'} · 스캔 ${fmt(S.universe)}종목${S.missing>S.universe*0.05?` · <span class="down">시세 누락 ${fmt(S.missing)}</span>`:''}</p>
  <section class="sec" id="secA"><h2>A등급 · 미너비니 판정 <span class="cnt">${A.length}종목</span></h2>
- <p class="note">차트·가격 위치·실적을 모두 충족한 핵심 후보입니다. 매수 검토 → 관망 순, 피벗에 가까운 순.</p>
+ <p class="note">차트·가격 위치·실적을 모두 충족한 핵심 후보입니다. 매수 검토 → 관망 순, 피벗에 가까운 순. 종목을 누르면 상세가 펼쳐집니다.</p>
  ${A.length?`<div class="cards">${A.map(r=>card(m,r)).join('')}</div>`:'<p class="empty">오늘은 A등급 종목이 없습니다. 아래 B등급과 패턴 후보를 참고하세요.</p>'}</section>
  <details class="fold" ${vp.length&&!A.length?'open':''}><summary>VCP·베이스 패턴 후보<span class="cnt">${vp.length}</span></summary><div class="in"><p class="note">A등급 외에 RS ${S.patRs??85} 이상이면서 피벗 근처에 베이스가 있는 종목(실적이나 가격 위치 조건은 미달).</p>
  ${vp.length?vp.sort((a,b)=>Math.abs(a.patPivot??a.toPivot)-Math.abs(b.patPivot??b.toPivot)).map(r=>row(m,r,`RS ${r.rs}<br><span class="cd">피벗 ${pct(r.patPivot??r.toPivot)}</span>`)).join(''):'<p class="empty">없음</p>'}</div></details>
