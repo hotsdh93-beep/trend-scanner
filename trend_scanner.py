@@ -569,30 +569,43 @@ def minervini_view(r, mkt):
     pats = [x for x in (r.get("pattern") or "").split(" · ") if x and x != "컵 형성"]
     base = ("VCP" if r.get("vcp") else "") or (pats[0] if pats else "")
     to_piv = r.get("patPivot") if pats and r.get("patPivot") is not None else r.get("toPivot")
-    pivot = p * (1 + to_piv / 100) if to_piv is not None else None
     bn = base if base.endswith("베이스") else f"{base} 베이스"
+    # 베이스가 없으면 52주 고점을 넘어서는 지점을 피벗 후보로 본다
+    if base and to_piv is not None:
+        pivot, pl = p * (1 + to_piv / 100), "피벗"
+    elif r.get("fromHi") is not None:
+        pivot, pl = p / (1 + r["fromHi"] / 100), "52주 고점"
+        to_piv = (pivot / p - 1) * 100
+    else:
+        pivot, pl = None, "피벗"
+    # 1) 차트 자리 판단 (시장과 무관)
+    if (r.get("vs50") or 0) > 20 or (base and to_piv is not None and to_piv < -5):
+        sv = "관망"
+        ext = f"50일선보다 {r['vs50']:.0f}% 위" if (r.get("vs50") or 0) > 20 else f"피벗보다 {-to_piv:.0f}% 위"
+        line = f"이미 {ext}로 많이 올랐습니다. 추격 매수 대신 다음 베이스나 10·21일선 눌림을 기다립니다."
+    elif base and to_piv is not None and -5 <= to_piv <= 3:
+        sv = "매수 검토"
+        if to_piv >= 0:
+            line = f"{bn}의 피벗까지 {to_piv:.1f}% 남았습니다. 피벗을 평소보다 40~50% 많은 거래량으로 돌파할 때가 매수 시점입니다."
+        else:
+            line = f"{bn}의 피벗을 {-to_piv:.1f}% 넘어선 상태로, 피벗 위 5% 이내의 매수 가능 구간입니다. 돌파 때 거래량이 충분했는지 확인하세요."
+    elif base and to_piv is not None:
+        sv = "관망"
+        line = f"{bn}는 있지만 피벗까지 {to_piv:.0f}% 남았습니다. 피벗 근처로 다가올 때까지 기다립니다."
+    else:
+        sv = "관망"
+        line = "추세와 실적은 좋지만 뚜렷한 베이스(VCP·컵·플랫)가 아직 없습니다. 베이스가 만들어질 때까지 기다리고, 그 전에는 52주 고점 돌파를 참고합니다."
     why = []
+    # 2) 시장 추세
     if mkt and mkt["state"] == "down":
         v = "보류"
         why.append(f"{mkt['name']} 지수가 200일선 아래 하락 추세입니다. 미너비니는 이때 신규 매수를 하지 않고 현금을 지킵니다.")
-    elif (r.get("vs50") or 0) > 20 or (to_piv is not None and to_piv < -5):
-        v = "관망"
-        ext = f"50일선보다 {r['vs50']:.0f}% 위" if (r.get("vs50") or 0) > 20 else f"피벗보다 {-to_piv:.0f}% 위"
-        why.append(f"이미 {ext}로 많이 올랐습니다. 추격 매수 대신 다음 베이스나 10·21일선 눌림을 기다립니다.")
-    elif base and to_piv is not None and -5 <= to_piv <= 3:
-        v = "매수 검토"
-        if to_piv >= 0:
-            why.append(f"{bn}의 피벗까지 {to_piv:.1f}% 남았습니다. 피벗을 평소보다 40~50% 많은 거래량으로 돌파할 때가 매수 시점입니다.")
-        else:
-            why.append(f"{bn}의 피벗을 {-to_piv:.1f}% 넘어선 상태로, 피벗 위 5% 이내의 매수 가능 구간입니다. 돌파 때 거래량이 충분했는지 확인하세요.")
-    elif base and to_piv is not None:
-        v = "관망"
-        why.append(f"{bn}는 있지만 피벗까지 {to_piv:.0f}% 남았습니다. 피벗 근처로 다가올 때까지 기다립니다.")
+        why.append(("시장이 돌아서면: " if sv == "매수 검토" else "차트 자리: ") + line)
     else:
-        v = "관망"
-        why.append("추세와 실적은 좋지만 뚜렷한 베이스(VCP·컵·플랫)와 피벗이 아직 없습니다. 베이스가 만들어질 때까지 기다립니다.")
-    if v != "보류" and mkt and mkt["state"] == "correction":
-        why.append(f"{mkt['name']} 지수가 50일선 아래로 조정 중이라 매수해도 비중을 줄이는 게 원칙입니다.")
+        v = sv
+        why.append(line)
+        if mkt and mkt["state"] == "correction":
+            why.append(f"{mkt['name']} 지수가 50일선 아래로 조정 중이라 매수해도 비중을 줄이는 게 원칙입니다.")
     vr = r.get("volRatio")
     if vr is not None and vr < 0.8:
         why.append("최근 거래량이 줄었습니다(매도 압력 감소, 좋은 신호).")
@@ -601,9 +614,9 @@ def minervini_view(r, mkt):
     eps, rev = r.get("eps"), r.get("rev")
     if eps is not None and rev is not None:
         why.append(f"최근 분기 이익 {eps:+.0f}%, 매출 {rev:+.0f}% 성장(전년 동기 대비)으로 실적 조건은 충족합니다.")
-    entry = max(p, pivot) if (pivot and v == "매수 검토") else None
-    return {"v": v, "why": why, "pivot": _r(pivot, 4) if base else None, "stop": _r(entry * 0.93, 4) if entry else None, "base": base}
-
+    entry = max(p, pivot) if (pivot and sv == "매수 검토") else None
+    return {"v": v, "why": why, "pivot": _r(pivot, 4), "pl": pl, "toPiv": _r(to_piv) if to_piv is not None else None,
+            "stop": _r(entry * 0.93, 4) if entry else None, "base": base, "setup": sv}
 
 def grade_of(r):
     """A: 8개 조건 + 가격 위치 + 실적 / B: 8개 조건 + 가격 위치 / C: 8개 조건만"""
@@ -764,6 +777,8 @@ body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 "Pretendard","
 .stat .n{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
 .stat .l{font-size:11.5px;color:var(--muted)}
 .stat.hl{border-color:var(--up)}.stat.hl .n{color:var(--up)}
+.legend{margin-top:10px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 12px;font-size:12.5px;color:var(--muted);display:grid;gap:4px}
+.legend .g{margin:0 6px 0 0}
 .meta{font-size:12px;color:var(--muted);margin:8px 2px 0}
 .cards{display:grid;gap:8px;grid-template-columns:1fr;align-items:start}
 @media (min-width:720px){.cards{max-width:780px}.stats{grid-template-columns:repeat(4,minmax(0,160px))}}
@@ -859,13 +874,13 @@ function changes(m){const M=D[m];if(!M.prev)return null;const was=new Map(M.prev
 function hist(m){return D.history.filter(h=>h.market===m);}
 function card(m,r){const v=r.view||{v:'관망',why:[]};
  const tp=r.patPivot??r.toPivot;
- return `<details class="card"><summary class="hd"><div class="t"><span class="nm">${esc(r.n)}</span><div class="cd">${esc(code(r.s))} · RS ${r.rs}${v.base?' · '+esc(v.base):''}${v.pivot&&tp!=null?' · 피벗까지 '+pct(tp):''}</div></div><div class="rt"><span class="vd ${VC[v.v]||'watch'}">${esc(v.v)}</span><div class="q">${price(m,r.p)} <span class="${r.chg>0?'up':r.chg<0?'down':''}">${pct(r.chg,2)}</span></div></div></summary>
+ return `<details class="card"><summary class="hd"><div class="t"><span class="nm">${esc(r.n)}</span><div class="cd">${esc(code(r.s))} · RS ${r.rs}${v.base?' · '+esc(v.base):''}${v.pivot&&(v.toPiv??tp)!=null?' · '+esc(v.pl||'피벗')+'까지 '+pct(v.toPiv??tp):''}${v.v==='보류'&&v.setup==='매수 검토'?' · <b class="up">자리 좋음</b>':''}</div></div><div class="rt"><span class="vd ${VC[v.v]||'watch'}">${esc(v.v)}</span><div class="q">${price(m,r.p)} <span class="${r.chg>0?'up':r.chg<0?'down':''}">${pct(r.chg,2)}</span></div></div></summary>
  <div class="body">${spark(r.spark,true)}
  <div class="kv"><div><div class="k">RS</div><div class="v">${r.rs}</div></div><div><div class="k">이익 성장</div><div class="v up">${pct(r.eps,0)}</div></div><div><div class="k">매출 성장</div><div class="v up">${pct(r.rev,0)}</div></div>
  <div><div class="k">고점 대비</div><div class="v">${pct(r.fromHi)}</div></div><div><div class="k">50일선 대비</div><div class="v">${pct(r.vs50)}</div></div><div><div class="k">거래량 10/50일</div><div class="v">${r.volRatio?.toFixed(2)??'—'}</div></div></div>
  <div class="tags">${tags(r)}</div>
  <ul class="why">${(v.why||[]).map(w=>`<li>${esc(w)}</li>`).join('')}</ul>
- ${v.pivot?`<div class="lv"><span>피벗 <b>${price(m,v.pivot)}</b></span>${v.stop?`<span>손절 기준 <b class="down">${price(m,v.stop)}</b> (−7%)</span>`:''}</div>`:''}
+ ${v.pivot?`<div class="lv"><span>${esc(v.pl||'피벗')} <b>${price(m,v.pivot)}</b></span>${v.stop?`<span>손절 기준 <b class="down">${price(m,v.stop)}</b> (−7%${v.v==='보류'?', 시장 회복 시':''})</span>`:''}</div>`:''}
  <a class="go" href="${link(m,r.s)}" target="_blank" rel="noopener">차트 보기 ↗</a></div></details>`;}
 function row(m,r,right){return `<div class="row"><div class="t"><a href="${link(m,r.s)}" target="_blank" rel="noopener">${esc(r.n)}</a>${r.grade?`<span class="g ${r.grade}">${r.grade}</span>`:''}<div class="s">${esc(code(r.s))} · ${tags(r)||esc(exName(m,r))}</div></div>${spark(r.spark,false)}<div class="r">${right}</div></div>`;}
 function render(){
@@ -874,13 +889,14 @@ function render(){
  if(!S){v.innerHTML=`<p class="empty" style="margin-top:20px">${NAMES[m]} 스캔 결과가 아직 없습니다.</p>`;return;}
  const mk=S.mkt,A=M.rows.filter(r=>r.grade==='A');
  const ord={'매수 검토':0,'관망':1,'보류':2};
- A.sort((a,b)=>(ord[a.view?.v]??1)-(ord[b.view?.v]??1)||Math.abs(a.patPivot??a.toPivot??99)-Math.abs(b.patPivot??b.toPivot??99)||b.rs-a.rs);
+ A.sort((a,b)=>(ord[a.view?.v]??1)-(ord[b.view?.v]??1)||(ord[a.view?.setup]??1)-(ord[b.view?.setup]??1)||Math.abs(a.patPivot??a.toPivot??99)-Math.abs(b.patPivot??b.toPivot??99)||b.rs-a.rs);
  const buy=A.filter(r=>r.view?.v==='매수 검토').length;
  const vp=M.rows.filter(r=>r.grade!=='A'&&(r.vcp||(r.pattern&&r.pattern!=='컵 형성'&&r.score===8&&r.rs>=(S.patRs??85))));
  const ch=changes(m),h=hist(m),prevH=h.length>1?h[h.length-2]:null,dPass=prevH?S.pass-prevH.pass:null;
  v.innerHTML=`
  ${mk?`<div class="mkt ${mk.state}"><span class="dot"></span><div><b>${esc(mk.name)} ${esc(mk.label)}</b><div class="sub">${fmt(mk.close)} (${pct(mk.chg,2)}) · 50일선 ${pct(mk.vs50)} · 200일선 ${pct(mk.vs200)}${mk.state==='down'?' · 신규 매수 쉬는 구간':mk.state==='correction'?' · 매수 비중 줄이기':''}</div></div></div>`:''}
  <div class="stats"><div class="stat hl" data-go="A"><div class="n">${buy}</div><div class="l">매수 검토</div></div><div class="stat" data-go="A"><div class="n">${A.length}</div><div class="l">A등급</div></div><div class="stat" data-go="Bo"><div class="n">${fmt(S.gradeB??0)}</div><div class="l">B등급</div></div><div class="stat" data-go="8"><div class="n">${fmt(S.pass)}</div><div class="l">8개 조건${!dPass?'':` <span class="${dPass>0?'up':dPass<0?'down':''}">${dPass>0?'+':''}${dPass}</span>`}</div></div></div>
+ <div class="legend"><div><span class="g A">A</span> 8개 조건 + 가격 위치(고점 ${S.maxFromHigh??15}% 이내, 50일선 +${S.maxAbove50??25}% 이하) + 실적(최근 분기 이익 +${S.epsMin??25}%, 매출 +${S.revMin??20}% 이상)</div><div><span class="g B">B</span> 8개 조건 + 가격 위치 (실적 미달이거나 실적 데이터 없음)</div><div><span class="g C">C</span> 8개 조건만 (고점에서 멀거나 50일선 위로 과열)</div></div>
  <p class="meta">기준일 ${esc(S.asOf)} ${S.intraday?'<b class="down">장중 시세</b>':'종가'} · 스캔 ${fmt(S.universe)}종목${S.missing>S.universe*0.05?` · <span class="down">시세 누락 ${fmt(S.missing)}</span>`:''}</p>
  <section class="sec" id="secA"><h2>A등급 · 미너비니 판정 <span class="cnt">${A.length}종목</span></h2>
  <p class="note">차트·가격 위치·실적을 모두 충족한 핵심 후보입니다. 매수 검토 → 관망 순, 피벗에 가까운 순. 종목을 누르면 상세가 펼쳐집니다.</p>
