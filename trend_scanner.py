@@ -759,7 +759,8 @@ body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 "Pretendard","
 .mkt.up .dot{background:var(--up)}.mkt.correction .dot{background:var(--warn)}.mkt.down .dot{background:var(--down)}
 .mkt b{font-size:15px}.mkt .sub{font-size:12.5px;color:var(--muted)}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
-.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 8px;text-align:center}
+.sec,details.fold{scroll-margin-top:110px}
+.stat{cursor:pointer;-webkit-tap-highlight-color:transparent;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 8px;text-align:center}
 .stat .n{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
 .stat .l{font-size:11.5px;color:var(--muted)}
 .stat.hl{border-color:var(--up)}.stat.hl .n{color:var(--up)}
@@ -872,20 +873,22 @@ function render(){
  const ch=changes(m),h=hist(m),prevH=h.length>1?h[h.length-2]:null,dPass=prevH?S.pass-prevH.pass:null;
  v.innerHTML=`
  ${mk?`<div class="mkt ${mk.state}"><span class="dot"></span><div><b>${esc(mk.name)} ${esc(mk.label)}</b><div class="sub">${fmt(mk.close)} (${pct(mk.chg,2)}) · 50일선 ${pct(mk.vs50)} · 200일선 ${pct(mk.vs200)}${mk.state==='down'?' · 신규 매수 쉬는 구간':mk.state==='correction'?' · 매수 비중 줄이기':''}</div></div></div>`:''}
- <div class="stats"><div class="stat hl"><div class="n">${buy}</div><div class="l">매수 검토</div></div><div class="stat"><div class="n">${A.length}</div><div class="l">A등급</div></div><div class="stat"><div class="n">${fmt(S.gradeB??0)}</div><div class="l">B등급</div></div><div class="stat"><div class="n">${fmt(S.pass)}</div><div class="l">8개 조건${!dPass?'':` <span class="${dPass>0?'up':dPass<0?'down':''}">${dPass>0?'+':''}${dPass}</span>`}</div></div></div>
+ <div class="stats"><div class="stat hl" data-go="A"><div class="n">${buy}</div><div class="l">매수 검토</div></div><div class="stat" data-go="A"><div class="n">${A.length}</div><div class="l">A등급</div></div><div class="stat" data-go="Bo"><div class="n">${fmt(S.gradeB??0)}</div><div class="l">B등급</div></div><div class="stat" data-go="8"><div class="n">${fmt(S.pass)}</div><div class="l">8개 조건${!dPass?'':` <span class="${dPass>0?'up':dPass<0?'down':''}">${dPass>0?'+':''}${dPass}</span>`}</div></div></div>
  <p class="meta">기준일 ${esc(S.asOf)} ${S.intraday?'<b class="down">장중 시세</b>':'종가'} · 스캔 ${fmt(S.universe)}종목${S.missing>S.universe*0.05?` · <span class="down">시세 누락 ${fmt(S.missing)}</span>`:''}</p>
- <section class="sec"><h2>A등급 · 미너비니 판정 <span class="cnt">${A.length}종목</span></h2>
+ <section class="sec" id="secA"><h2>A등급 · 미너비니 판정 <span class="cnt">${A.length}종목</span></h2>
  <p class="note">차트·가격 위치·실적을 모두 충족한 핵심 후보입니다. 매수 검토 → 관망 순, 피벗에 가까운 순.</p>
  ${A.length?`<div class="cards">${A.map(r=>card(m,r)).join('')}</div>`:'<p class="empty">오늘은 A등급 종목이 없습니다. 아래 B등급과 패턴 후보를 참고하세요.</p>'}</section>
  <details class="fold" ${vp.length&&!A.length?'open':''}><summary>VCP·베이스 패턴 후보<span class="cnt">${vp.length}</span></summary><div class="in"><p class="note">A등급 외에 RS ${S.patRs??85} 이상이면서 피벗 근처에 베이스가 있는 종목(실적이나 가격 위치 조건은 미달).</p>
  ${vp.length?vp.sort((a,b)=>Math.abs(a.patPivot??a.toPivot)-Math.abs(b.patPivot??b.toPivot)).map(r=>row(m,r,`RS ${r.rs}<br><span class="cd">피벗 ${pct(r.patPivot??r.toPivot)}</span>`)).join(''):'<p class="empty">없음</p>'}</div></details>
  <details class="fold"><summary>신규 진입 · 이탈<span class="cnt">${ch?ch.length:'—'}</span></summary><div class="in"><p class="note">직전 거래일과 비교해 8개 조건을 새로 충족했거나 깨진 종목.</p>
  ${!ch?'<p class="empty">비교할 직전 결과가 아직 없습니다.</p>':ch.length?ch.map(r=>row(m,r,`<span class="pill ${r.change==='진입'?'in':'out'}">${r.change}</span><br><span class="cd">${r.score==null?'6개 이하':r.score+'/8'}</span>`)).join(''):'<p class="empty">변동 없음</p>'}</div></details>
- <details class="fold"><summary>전체 목록<span class="cnt">${M.rows.length}</span></summary><div class="in">
- <div class="controls"><select id="f"><option value="B">B등급 이상</option><option value="8">8개 모두 충족</option><option value="7">7개 이상</option></select><input id="q" type="search" placeholder="종목명·코드"></div><div id="list"></div></div></details>`;
- const f=$('#f'),q=$('#q');f.value=st[m].f;q.value=st[m].q;f.onchange=()=>{st[m].f=f.value;list();};q.oninput=()=>{st[m].q=q.value.trim().toLowerCase();list();};list();}
+ <details class="fold" id="allBox"><summary>전체 목록<span class="cnt">${M.rows.length}</span></summary><div class="in">
+ <div class="controls"><select id="f"><option value="B">A·B등급</option><option value="Bo">B등급만</option><option value="8">8개 모두 충족</option><option value="7">7개 이상</option></select><input id="q" type="search" placeholder="종목명·코드"></div><div id="list"></div></div></details>`;
+ const f=$('#f'),q=$('#q');f.value=st[m].f;q.value=st[m].q;f.onchange=()=>{st[m].f=f.value;list();};q.oninput=()=>{st[m].q=q.value.trim().toLowerCase();list();};list();
+ document.querySelectorAll('.stat[data-go]').forEach(e=>e.onclick=()=>go(e.dataset.go));}
+function go(k){if(k==='A'){$('#secA').scrollIntoView({behavior:'smooth'});return;}st[st.m].f=k;$('#f').value=k;list();const b=$('#allBox');b.open=true;b.scrollIntoView({behavior:'smooth'});}
 function list(){const m=st.m,o=st[m];let rows=D[m].rows.slice();
- if(o.f==='B')rows=rows.filter(r=>r.grade==='A'||r.grade==='B');if(o.f==='8')rows=rows.filter(r=>r.score===8);
+ if(o.f==='Bo')rows=rows.filter(r=>r.grade==='B');if(o.f==='B')rows=rows.filter(r=>r.grade==='A'||r.grade==='B');if(o.f==='8')rows=rows.filter(r=>r.score===8);
  if(o.q)rows=rows.filter(r=>(r.n+' '+r.s).toLowerCase().includes(o.q));
  const GO={A:0,B:1,C:2};rows.sort((a,b)=>(GO[a.grade]??3)-(GO[b.grade]??3)||b.rs-a.rs);
  $('#list').innerHTML=rows.length?rows.slice(0,300).map(r=>row(m,r,`RS ${r.rs}<br><span class="cd">${pct(r.eps,0)} / ${pct(r.rev,0)}</span>`)).join('')+(rows.length>300?`<p class="empty">상위 300개만 표시</p>`:''):'<p class="empty">조건에 맞는 종목이 없습니다.</p>';}
