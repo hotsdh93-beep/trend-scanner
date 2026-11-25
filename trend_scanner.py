@@ -534,6 +534,77 @@ def fetch_fundamentals(symbols, budget=420):
     return cache
 
 
+INDEX = {"kr": ("^KS11", "코스피"), "us": ("^GSPC", "S&P 500")}
+
+
+def market_condition(market):
+    """지수의 50일·200일선 위치로 시장 추세를 본다. 미너비니는 지수가 하락 추세일 때 신규 매수를 하지 않는다."""
+    sym, name = INDEX[market]
+    try:
+        df = yf.download(sym, period="2y", interval="1d", auto_adjust=False, progress=False, timeout=30)
+        if isinstance(df.columns, pd.MultiIndex):
+            df = df.xs(sym, axis=1, level=1) if sym in df.columns.get_level_values(1) else df.droplevel(1, axis=1)
+        C = df["Close"].dropna().to_numpy(float)
+        if len(C) < 220:
+            return None
+        e = len(C) - 1
+        m50, m200, m200_1m = _sma(C, 50, e), _sma(C, 200, e), _sma(C, 200, e - 22)
+        if C[e] > m50 and m50 > m200 and m200 >= m200_1m:
+            state, label = "up", "상승 추세"
+        elif C[e] > m200:
+            state, label = "correction", "조정 중"
+        else:
+            state, label = "down", "하락 추세"
+        return {"name": name, "close": round(float(C[e]), 2), "chg": round((C[e] / C[e - 1] - 1) * 100, 2),
+                "vs50": round((C[e] / m50 - 1) * 100, 1), "vs200": round((C[e] / m200 - 1) * 100, 1),
+                "state": state, "label": label}
+    except Exception as ex:
+        log.warning("[%s] 지수 추세 확인 실패: %s", market, ex)
+        return None
+
+
+def minervini_view(r, mkt):
+    """A등급 종목을 미너비니 매수 원칙(시장 추세·베이스·피벗·확장·손절)으로 판정한 참고 의견. 규칙 기반."""
+    p = r["p"]
+    pats = [x for x in (r.get("pattern") or "").split(" · ") if x and x != "컵 형성"]
+    base = ("VCP" if r.get("vcp") else "") or (pats[0] if pats else "")
+    to_piv = r.get("patPivot") if pats and r.get("patPivot") is not None else r.get("toPivot")
+    pivot = p * (1 + to_piv / 100) if to_piv is not None else None
+    bn = base if base.endswith("베이스") else f"{base} 베이스"
+    why = []
+    if mkt and mkt["state"] == "down":
+        v = "보류"
+        why.append(f"{mkt['name']} 지수가 200일선 아래 하락 추세입니다. 미너비니는 이때 신규 매수를 하지 않고 현금을 지킵니다.")
+    elif (r.get("vs50") or 0) > 20 or (to_piv is not None and to_piv < -5):
+        v = "관망"
+        ext = f"50일선보다 {r['vs50']:.0f}% 위" if (r.get("vs50") or 0) > 20 else f"피벗보다 {-to_piv:.0f}% 위"
+        why.append(f"이미 {ext}로 많이 올랐습니다. 추격 매수 대신 다음 베이스나 10·21일선 눌림을 기다립니다.")
+    elif base and to_piv is not None and -5 <= to_piv <= 3:
+        v = "매수 검토"
+        if to_piv >= 0:
+            why.append(f"{bn}의 피벗까지 {to_piv:.1f}% 남았습니다. 피벗을 평소보다 40~50% 많은 거래량으로 돌파할 때가 매수 시점입니다.")
+        else:
+            why.append(f"{bn}의 피벗을 {-to_piv:.1f}% 넘어선 상태로, 피벗 위 5% 이내의 매수 가능 구간입니다. 돌파 때 거래량이 충분했는지 확인하세요.")
+    elif base and to_piv is not None:
+        v = "관망"
+        why.append(f"{bn}는 있지만 피벗까지 {to_piv:.0f}% 남았습니다. 피벗 근처로 다가올 때까지 기다립니다.")
+    else:
+        v = "관망"
+        why.append("추세와 실적은 좋지만 뚜렷한 베이스(VCP·컵·플랫)와 피벗이 아직 없습니다. 베이스가 만들어질 때까지 기다립니다.")
+    if v != "보류" and mkt and mkt["state"] == "correction":
+        why.append(f"{mkt['name']} 지수가 50일선 아래로 조정 중이라 매수해도 비중을 줄이는 게 원칙입니다.")
+    vr = r.get("volRatio")
+    if vr is not None and vr < 0.8:
+        why.append("최근 거래량이 줄었습니다(매도 압력 감소, 좋은 신호).")
+    elif vr is not None and vr > 1.5 and (r.get("chg") or 0) < 0:
+        why.append("하락하는 날 거래량이 늘었습니다. 기관 매도 가능성을 확인하세요.")
+    eps, rev = r.get("eps"), r.get("rev")
+    if eps is not None and rev is not None:
+        why.append(f"최근 분기 이익 {eps:+.0f}%, 매출 {rev:+.0f}% 성장(전년 동기 대비)으로 실적 조건은 충족합니다.")
+    entry = max(p, pivot) if (pivot and v == "매수 검토") else None
+    return {"v": v, "why": why, "pivot": _r(pivot, 4) if base else None, "stop": _r(entry * 0.93, 4) if entry else None, "base": base}
+
+
 def grade_of(r):
     """A: 8개 조건 + 가격 위치 + 실적 / B: 8개 조건 + 가격 위치 / C: 8개 조건만"""
     if r["score"] != 8:
@@ -588,6 +659,10 @@ def scan(market):
         f = fund.get(r["s"]) or {}
         r["eps"], r["rev"] = f.get("eps"), f.get("rev")
         r["grade"] = grade_of(r)
+    mkt = market_condition(market)
+    for r in rows:
+        if r["grade"] == "A":
+            r["view"] = minervini_view(r, mkt)
     order = {"A": 0, "B": 1, "C": 2, "": 3}
     rows.sort(key=lambda r: (order[r["grade"]], -r["score"], -r["rs"]))
     summary = {
@@ -601,6 +676,8 @@ def scan(market):
         "epsMin": EPS_GROWTH_MIN, "revMin": REV_GROWTH_MIN,
         "seconds": round(time.time() - t0),
         "intraday": bool(as_of and market_open_now(market, as_of)),
+        "mkt": mkt,
+        "buy": int(sum(1 for r in rows if r.get("view", {}).get("v") == "매수 검토")),
     }
     log.info("[%s] 완료: %s", market, summary)
     return summary, rows
@@ -654,61 +731,101 @@ def build_report(site_dir=None):
 
 
 TEMPLATE = r"""<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>트렌드 템플릿 스캐너</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="트렌드스캐너"><meta name="theme-color" content="#2f6b4f">
 <style>
-:root{--bg:#f6f7f5;--panel:#fff;--fg:#1d2420;--muted:#66706a;--line:#dfe3df;--accent:#2f6b4f;--up:#1f7a4d;--down:#c0392b;--chip:#eef2ee;color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--bg:#121513;--panel:#1a1e1c;--fg:#e6ebe7;--muted:#98a29c;--line:#2c322f;--accent:#6fbf94;--up:#57c08a;--down:#ef6f61;--chip:#232926;color-scheme:dark}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 "Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif}
-.wrap{max-width:1180px;margin:0 auto;padding:24px max(16px,env(safe-area-inset-left))}
-h1{font-size:24px;margin:0;font-weight:700;letter-spacing:-.01em}h2{font-size:15px;margin:0;font-weight:600}
-.take{color:var(--muted);margin:6px 0 0}.meta{color:var(--muted);font-size:12px;margin:0}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:20px 0 16px}
-.tab{background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:8px 14px;font:inherit;color:var(--muted);cursor:pointer}
-.tab[aria-selected=true]{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
-.grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:12px;margin-top:12px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0;display:flex;flex-direction:column;gap:8px}
-.lbl{font-size:12px;color:var(--muted)}.big{font-size:30px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
-.sub{font-size:12px;color:var(--muted)}.up{color:var(--up)}.down{color:var(--down)}
-.note{font-size:12px;color:var(--muted);margin:0}
-.scroll{overflow:auto;max-height:560px}.scroll.short{max-height:330px}
-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
-th{position:sticky;top:0;background:var(--panel);text-align:left;font-size:12px;font-weight:600;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
-td{padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
-.num{text-align:right}th.sortable{cursor:pointer}th.sortable:hover{color:var(--fg)}
-td.name{white-space:normal;min-width:120px}td.name a{color:var(--fg);text-decoration:none}td.name a:hover{text-decoration:underline}
-.code{font-size:11px;color:var(--muted)}
-.dots{display:inline-flex;gap:2px}.dot{width:7px;height:7px;border-radius:2px;background:var(--up)}.dot.off{background:transparent;box-shadow:inset 0 0 0 1.5px var(--down)}
-.pill{display:inline-block;padding:0 8px;border-radius:99px;font-size:12px;border:1px solid currentColor}
-.grade{display:inline-block;min-width:20px;text-align:center;padding:0 6px;border-radius:5px;font-size:11px;font-weight:700;margin-left:6px;vertical-align:1px}
-.grade.A{background:var(--up);color:#fff}.grade.B{background:var(--chip);color:var(--fg);box-shadow:inset 0 0 0 1px var(--line)}.grade.C{color:var(--muted);box-shadow:inset 0 0 0 1px var(--line)}
-.pill.in{color:var(--up)}.pill.pat{color:#b06a00}@media (prefers-color-scheme:dark){.pill.pat{color:#f0a64a}}.pill{margin:1px 0}.pill.out{color:var(--down)}.pill.vcp{color:var(--accent)}
-.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
-select,input{font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
-.empty{color:var(--muted);font-size:12px;padding:12px 0;margin:0}
-details{margin-top:20px;color:var(--muted);font-size:13px}summary{cursor:pointer;color:var(--fg)}
-details li{margin:3px 0}svg text{fill:var(--muted);font-size:11px}
-@media (max-width:640px){.hide-sm{display:none}}
+/* 휴대폰 우선: 위에서부터 시장 상태 → 오늘 요약 → A등급 카드 → 나머지는 접힌 메뉴 */
+:root{--bg:#f4f5f2;--panel:#fff;--fg:#1b211e;--muted:#67716b;--line:#e0e4df;--accent:#2f6b4f;--up:#1d7a4b;--down:#c23b2c;--warn:#a86a00;--chip:#edf1ec;
+--buy-bg:#e3f3ea;--watch-bg:#fbf1dc;--hold-bg:#f8e3e0;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#111412;--panel:#191d1b;--fg:#e7ece8;--muted:#9aa49e;--line:#2b312e;--accent:#73c49a;--up:#5cc58e;--down:#f07364;--warn:#f0b04a;--chip:#222825;
+--buy-bg:#183527;--watch-bg:#382c14;--hold-bg:#3a1d19;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 "Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;-webkit-text-size-adjust:100%}
+.wrap{max-width:1100px;margin:0 auto;padding:0 max(14px,env(safe-area-inset-left)) 40px max(14px,env(safe-area-inset-right))}
+.top{position:sticky;top:0;z-index:5;background:var(--bg);padding:calc(env(safe-area-inset-top,0px) + 12px) 0 0;border-bottom:1px solid var(--line)}
+.top h1{font-size:18px;margin:0;font-weight:700;letter-spacing:-.01em;display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.top h1 small{font-size:12px;font-weight:400;color:var(--muted)}
+.tabs{display:flex;gap:2px;margin-top:8px}
+.tab{flex:1;background:none;border:0;border-bottom:2.5px solid transparent;padding:9px 0;font:inherit;font-size:15px;color:var(--muted);cursor:pointer}
+.tab[aria-selected=true]{color:var(--fg);border-bottom-color:var(--accent);font-weight:700}
+.sec{margin-top:16px}
+.sec>h2{font-size:16px;margin:0 0 8px;font-weight:700;display:flex;align-items:baseline;gap:8px}
+.sec>h2 .cnt{font-size:13px;font-weight:500;color:var(--muted)}
+.note{font-size:12.5px;color:var(--muted);margin:0 0 8px}
+.mkt{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:14px}
+.mkt .dot{width:10px;height:10px;border-radius:50%;flex:none}
+.mkt.up .dot{background:var(--up)}.mkt.correction .dot{background:var(--warn)}.mkt.down .dot{background:var(--down)}
+.mkt b{font-size:15px}.mkt .sub{font-size:12.5px;color:var(--muted)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 8px;text-align:center}
+.stat .n{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
+.stat .l{font-size:11.5px;color:var(--muted)}
+.stat.hl{border-color:var(--up)}.stat.hl .n{color:var(--up)}
+.meta{font-size:12px;color:var(--muted);margin:8px 2px 0}
+.cards{display:grid;gap:10px;grid-template-columns:1fr}
+@media (min-width:720px){.cards{grid-template-columns:1fr 1fr}.stats{grid-template-columns:repeat(4,minmax(0,160px))}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;min-width:0}
+.card .hd{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.card .nm{font-size:16.5px;font-weight:700;line-height:1.3;color:var(--fg);text-decoration:none}
+.card .cd{font-size:12px;color:var(--muted)}
+.vd{flex:none;font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:99px;white-space:nowrap}
+.vd.buy{background:var(--buy-bg);color:var(--up)}.vd.watch{background:var(--watch-bg);color:var(--warn)}.vd.hold{background:var(--hold-bg);color:var(--down)}
+.px{display:flex;align-items:baseline;gap:8px;margin-top:6px;font-variant-numeric:tabular-nums}
+.px .p{font-size:20px;font-weight:700}.px .c{font-size:13.5px}
+.up{color:var(--up)}.down{color:var(--down)}
+.sp{display:block;width:100%;height:54px;margin:6px 0 2px}
+.kv{display:grid;grid-template-columns:repeat(3,1fr);gap:6px 10px;margin-top:6px}
+.kv div{min-width:0}.kv .k{font-size:11.5px;color:var(--muted)}.kv .v{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.why{margin:10px 0 0;padding:10px 12px 10px 26px;background:var(--chip);border-radius:10px;font-size:13.5px}
+.why li{margin:2px 0}
+.lv{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:13px;font-variant-numeric:tabular-nums}
+.lv b{font-weight:600}
+.tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+.tag{font-size:11.5px;padding:1px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+.tag.pat{color:var(--warn);border-color:currentColor}.tag.vcp{color:var(--accent);border-color:currentColor}
+details.fold{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-top:10px}
+details.fold>summary{list-style:none;cursor:pointer;padding:13px 14px;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::after{content:"＋";color:var(--muted);font-weight:400}
+details.fold[open]>summary::after{content:"－"}
+details.fold>summary .cnt{font-weight:500;color:var(--muted);font-size:13px;margin-left:6px;margin-right:auto}
+.fold .in{padding:0 14px 14px}
+.row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.row .t{flex:1;min-width:0}.row .t a{color:var(--fg);text-decoration:none;font-weight:600}
+.row .t .s{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .r{text-align:right;font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.g{display:inline-block;font-size:11px;font-weight:700;padding:0 6px;border-radius:5px;margin-left:5px;vertical-align:1px}
+.g.A{background:var(--up);color:#fff}.g.B{background:var(--chip);color:var(--fg)}.g.C{color:var(--muted);box-shadow:inset 0 0 0 1px var(--line)}
+.pill{font-size:12px;padding:1px 8px;border-radius:99px}.pill.in{background:var(--buy-bg);color:var(--up)}.pill.out{background:var(--hold-bg);color:var(--down)}
+.controls{display:flex;gap:6px;margin-bottom:6px}
+.controls select,.controls input{font:inherit;font-size:14px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);min-width:0}
+.controls input{flex:1}
+.empty{color:var(--muted);font-size:13px;margin:4px 0}
+.disc{font-size:12px;color:var(--muted);margin-top:18px;text-align:center}
+.crit li{margin:3px 0}.crit{padding-left:20px;font-size:13px}.fold p{font-size:13px}
+svg text{fill:var(--muted);font-size:11px}
 </style></head><body><div class="wrap">
-<h1>트렌드 템플릿 스캐너</h1>
-<p class="take" id="take"></p>
-<p class="meta" id="gen"></p>
-<nav class="tabs"><button class="tab" data-m="kr">한국</button><button class="tab" data-m="us">미국</button></nav>
+<div class="top"><h1>트렌드 템플릿 스캐너 <small id="gen"></small></h1>
+<nav class="tabs"><button class="tab" data-m="kr">한국</button><button class="tab" data-m="us">미국</button></nav></div>
 <div id="view"></div>
-<div class="card" style="margin-top:12px"><h2>통과 종목 수 추이</h2><p class="note">스캔마다 8개 조건을 모두 충족한 종목 수. 늘면 주도주가 넓어지고, 줄면 시장이 약해지는 신호입니다.</p><div id="breadth"></div></div>
-<details><summary>스캔 기준</summary><ol>
-<li>주가가 150일·200일 이동평균선 위</li><li>150일선이 200일선 위</li><li>200일선이 1개월(22거래일) 전보다 높음</li>
-<li>50일선이 150일·200일선 위</li><li>주가가 50일선 위</li><li>주가가 52주 최저가보다 30% 이상 높음</li>
-<li>주가가 52주 최고가에서 25% 이내</li><li>RS 80 이상(기본값, 설정에서 변경): 3·6·9·12개월 수익률(3개월 2배 가중)을 같은 시장 안에서 백분위로 매긴 값</li></ol>
-<p>등급: <b>A</b> 8개 조건 + 가격 위치(52주 고점에서 15% 이내, 50일선 대비 +25% 이하) + 실적(최근 분기 순이익 +25% 이상, 매출 +20% 이상, 전년 같은 분기 대비). <b>B</b> 8개 조건 + 가격 위치(실적 미달이거나 실적 데이터 없음). <b>C</b> 8개 조건만 충족(고점에서 멀거나 과열). 실적은 Yahoo Finance 기준이며, 한국 종목은 실적 데이터가 없는 경우가 있습니다. 수치는 config.json에서 바꿀 수 있습니다.</p>
-<p>VCP 후보: 8개 조건 충족 + RS 85 이상 + 최근 6개월 고점 이후 조정폭이 2번 이상 차례로 작아짐(첫 조정 35% 이하, 마지막 12% 이하) + 최근 10일 거래량이 50일 평균보다 적음 + 피벗(직전 고점)까지 8% 이내.</p>
-<p>베이스 패턴 (모양은 주봉, 손잡이·피벗은 일봉): <b>컵앤핸들</b> 30% 이상 오른 뒤 12~35% 깊이·6~65주의 U자 컵, 오른쪽이 왼쪽 고점 90% 이상 회복, 1~4주·12% 이내 손잡이가 컵 위쪽 절반에 형성(손잡이 전이면 '컵 형성'). <b>플랫 베이스</b> 20% 이상 오른 뒤 5주 이상 고저 폭 15% 이내. <b>이중 바닥</b> 30% 이상 오른 뒤 12~40% 깊이·7주 이상, 두 번째 바닥이 첫 바닥을 8% 이내로 살짝 깨고 반등, 피벗은 W 가운데 고점. <b>하이 타이트 플래그</b> 8주 안에 90% 이상 급등 후 3~25일간 25% 이내 조정. 8개 조건을 충족하고 RS 85 이상이면서 피벗 근처(아래 15% ~ 돌파 후 5%)인 경우만 후보로 표시합니다. 규칙으로 찾은 근사치이니 최종 판단은 차트로 하세요.</p>
-<p>가격: 한국은 KRX 공식 종가, 미국은 정규장 종가입니다(시간외 거래 제외). 장중에 스캔하면 15~20분 지연된 장중 시세로 계산하고 화면에 '장중 시세'로 표시합니다. 한국 종목명·시장 구분은 KRX 공식 상장 목록을 씁니다.</p>
-<p>스캔 대상: 한국은 시가총액 3,000억 원 이상 보통주(우선주·스팩 제외), 미국은 시가총액 20억 달러·주가 10달러·3개월 평균 거래량 20만 주 이상인 NYSE·NASDAQ 상장 주식. 표에는 8개 모두 충족한 종목과, 7개 충족하면서 RS 80 이상인 종목을 담습니다. 시세 출처: Yahoo Finance.</p>
-<p>매매 추천이 아니라 차트를 직접 확인할 후보를 좁히는 도구입니다.</p></details>
+<details class="fold" id="breadthBox"><summary>통과 종목 수 추이</summary><div class="in"><p class="note">스캔마다 8개 조건을 모두 충족한 종목 수. 늘면 주도주가 넓어지고, 줄면 시장이 약해지는 신호입니다.</p><div id="breadth"></div></div></details>
+<details class="fold"><summary>판정·스캔 기준</summary><div class="in">
+<p><b>미너비니 판정</b> (A등급에만, 규칙으로 자동 판정)</p>
+<ul class="crit">
+<li><b>매수 검토</b>: VCP나 베이스(컵앤핸들·플랫·이중 바닥·플래그)가 있고 피벗 아래 3% ~ 위 5% 안. 피벗을 평소보다 40~50% 많은 거래량으로 돌파할 때 매수, 손절은 매수가 −7%.</li>
+<li><b>관망</b>: 베이스가 없거나 피벗까지 멀거나, 50일선 +20%·피벗 +5%를 넘게 올라 추격 위험.</li>
+<li><b>보류</b>: 지수가 200일선 아래 하락 추세. 미너비니는 이때 신규 매수를 하지 않습니다.</li>
+<li>시장 상태: 지수가 50일선·200일선 위이고 200일선이 오르면 상승 추세, 200일선 위·50일선 아래면 조정 중, 200일선 아래면 하락 추세.</li></ul>
+<p><b>등급</b>: A = 8개 조건 + 가격 위치(52주 고점 15% 이내, 50일선 +25% 이하) + 실적(최근 분기 순이익 +25%, 매출 +20% 이상, 전년 같은 분기 대비) · B = 8개 조건 + 가격 위치 · C = 8개 조건만.</p>
+<p><b>트렌드 템플릿 8개 조건</b></p>
+<ol class="crit"><li>주가가 150일·200일선 위</li><li>150일선이 200일선 위</li><li>200일선이 1개월 전보다 높음</li><li>50일선이 150일·200일선 위</li><li>주가가 50일선 위</li><li>52주 최저가보다 30% 이상 높음</li><li>52주 최고가에서 25% 이내</li><li>RS 80 이상(3·6·9·12개월 수익률을 같은 시장 안에서 백분위로 매긴 값)</li></ol>
+<p>VCP: 고점 이후 조정폭이 차례로 작아지고(첫 조정 35% 이하, 마지막 12% 이하) 거래량이 줄며 피벗 8% 이내. 베이스 모양은 주봉, 손잡이·피벗은 일봉으로 판별합니다.</p>
+<p>스캔 대상: 한국 시가총액 3,000억 원 이상 보통주, 미국 시가총액 20억 달러·주가 10달러·거래량 20만 주 이상. 시세·실적: KRX, Yahoo Finance. 수치는 config.json에서 바꿀 수 있습니다.</p>
+</div></details>
+<p class="disc">규칙으로 자동 판정한 참고 의견이며 투자 권유가 아닙니다. 매수 전 차트와 실적을 직접 확인하세요.</p>
 </div>
 <script>
 const D=/*__DATA__*/null;
@@ -717,87 +834,76 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=n=>n==null?'—':Number(n).toLocaleString('ko-KR');
 const pct=(v,d=1)=>v==null?'—':(v>0?'+':'')+Number(v).toFixed(d)+'%';
-const price=(m,v)=>v==null?'—':m==='kr'?Math.round(v).toLocaleString('ko-KR'):'$'+Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const price=(m,v)=>v==null?'—':m==='kr'?Math.round(v).toLocaleString('ko-KR')+'원':'$'+Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const code=s=>s.replace(/\.(KS|KQ)$/,'');
-const link=(m,s)=>m==='kr'?'https://finance.naver.com/item/fchart.naver?code='+code(s):'https://finance.yahoo.com/quote/'+encodeURIComponent(s)+'/chart';
-const st={m:'kr',kr:{sort:'grade',dir:1,f:'A',q:''},us:{sort:'grade',dir:1,f:'A',q:''}};
-function spark(v){if(!v||v.length<2)return'';const w=96,h=26,p=3,x=i=>p+i*(w-2*p)/(v.length-1),y=t=>h-p-t/100*(h-2*p);
- const c=v[v.length-1]>=v[0]?'var(--up)':'var(--down)';return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><path d="${v.map((t,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(t).toFixed(1)).join('')}" fill="none" stroke="${c}" stroke-width="1.5" stroke-linejoin="round"/><circle cx="${x(v.length-1)}" cy="${y(v[v.length-1])}" r="2.2" fill="${c}"/></svg>`;}
-function pills(t){return t?t.split(' · ').map(x=>`<span class="pill ${x==='컵 형성'?'':'pat'}">${esc(x)}</span>`).join(' '):'';}
-function nameCell(m,r){const ex=m==='kr'?(r.ex==='KSC'?' · 코스피':' · 코스닥'):'';return `<td class="name"><a href="${link(m,r.s)}" target="_blank" rel="noopener">${esc(r.n)}</a>${r.grade?`<span class="grade ${r.grade}" title="${r.grade}등급">${r.grade}</span>`:''}<div class="code">${esc(code(r.s))}${ex}</div></td>`;}
+const link=(m,s)=>m==='kr'?'https://m.stock.naver.com/domestic/stock/'+code(s)+'/total':'https://finance.yahoo.com/quote/'+encodeURIComponent(s)+'/chart';
+const VC={'매수 검토':'buy','관망':'watch','보류':'hold'};
+const st={m:'kr',kr:{f:'B',q:''},us:{f:'B',q:''}};
+function spark(v,big){if(!v||v.length<2)return'';const w=big?300:80,h=big?54:24,p=3,x=i=>p+i*(w-2*p)/(v.length-1),y=t=>h-p-t/100*(h-2*p);
+ const c=v[v.length-1]>=v[0]?'var(--up)':'var(--down)';const d=v.map((t,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(t).toFixed(1)).join('');
+ return `<svg class="${big?'sp':''}" width="${big?'100%':w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">${big?`<path d="${d}L${x(v.length-1)} ${h}L${x(0)} ${h}Z" fill="${c}" opacity=".08"/>`:''}<path d="${d}" fill="none" stroke="${c}" stroke-width="${big?2:1.5}" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;}
+function tags(r){const t=[];if(r.vcp)t.push('<span class="tag vcp">VCP</span>');(r.pattern||'').split(' · ').filter(Boolean).forEach(x=>t.push(`<span class="tag ${x==='컵 형성'?'':'pat'}">${esc(x)}</span>`));return t.join('');}
+function exName(m,r){return m==='kr'?(r.ex==='KSC'?'코스피':'코스닥'):(r.ex||'');}
 function changes(m){const M=D[m];if(!M.prev)return null;const was=new Map(M.prev.filter(r=>r.score===8).map(r=>[r.s,r]));const now=new Map(M.rows.map(r=>[r.s,r]));const out=[];
  for(const r of M.rows)if(r.score===8&&!was.has(r.s))out.push({...r,change:'진입'});
- for(const [s,r] of was){const c=now.get(s);if(!c||c.score<8)out.push({s,n:r.n,ex:c?.ex,change:'이탈',score:c?c.score:null,rs:c?c.rs:null});}
+ for(const [s,r] of was){const c=now.get(s);if(!c||c.score<8)out.push({s,n:r.n,ex:c?.ex,grade:c?.grade,change:'이탈',score:c?c.score:null,rs:c?c.rs:null});}
  return out.sort((a,b)=>a.change===b.change?(b.rs??0)-(a.rs??0):a.change==='진입'?-1:1);}
 function hist(m){return D.history.filter(h=>h.market===m);}
+function card(m,r){const v=r.view||{v:'관망',why:[]};
+ return `<article class="card"><div class="hd"><div><a class="nm" href="${link(m,r.s)}" target="_blank" rel="noopener">${esc(r.n)}</a><div class="cd">${esc(code(r.s))} · ${esc(exName(m,r))}</div></div><span class="vd ${VC[v.v]||'watch'}">${esc(v.v)}</span></div>
+ <div class="px"><span class="p">${price(m,r.p)}</span><span class="c ${r.chg>0?'up':r.chg<0?'down':''}">${pct(r.chg,2)}</span></div>
+ ${spark(r.spark,true)}
+ <div class="kv"><div><div class="k">RS</div><div class="v">${r.rs}</div></div><div><div class="k">이익 성장</div><div class="v up">${pct(r.eps,0)}</div></div><div><div class="k">매출 성장</div><div class="v up">${pct(r.rev,0)}</div></div>
+ <div><div class="k">고점 대비</div><div class="v">${pct(r.fromHi)}</div></div><div><div class="k">50일선 대비</div><div class="v">${pct(r.vs50)}</div></div><div><div class="k">거래량 10/50일</div><div class="v">${r.volRatio?.toFixed(2)??'—'}</div></div></div>
+ <div class="tags">${tags(r)}</div>
+ <ul class="why">${(v.why||[]).map(w=>`<li>${esc(w)}</li>`).join('')}</ul>
+ ${v.pivot?`<div class="lv"><span>피벗 <b>${price(m,v.pivot)}</b></span>${v.stop?`<span>손절 기준 <b class="down">${price(m,v.stop)}</b> (−7%)</span>`:''}</div>`:''}
+ </article>`;}
+function row(m,r,right){return `<div class="row"><div class="t"><a href="${link(m,r.s)}" target="_blank" rel="noopener">${esc(r.n)}</a>${r.grade?`<span class="g ${r.grade}">${r.grade}</span>`:''}<div class="s">${esc(code(r.s))} · ${tags(r)||esc(exName(m,r))}</div></div>${spark(r.spark,false)}<div class="r">${right}</div></div>`;}
 function render(){
  document.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected',t.dataset.m===st.m));
  const m=st.m,M=D[m],S=M.summary,v=$('#view');
- if(!S){v.innerHTML=`<p class="empty">${NAMES[m]} 스캔 결과가 아직 없습니다. "지금 스캔.bat"을 실행하세요.</p>`;return;}
- const h=hist(m),prevH=h.length>1?h[h.length-2]:null,dPass=prevH?S.pass-prevH.pass:null,ch=changes(m);
- const nIn=ch?ch.filter(c=>c.change==='진입').length:null,nOut=ch?ch.filter(c=>c.change==='이탈').length:null;
- const vc=M.rows.filter(r=>r.vcp).sort((a,b)=>a.toPivot-b.toPivot);
- const PR=S.patRs??85;const pt=M.rows.filter(r=>r.score===8&&r.rs>=PR&&r.pattern&&r.pattern!=='컵 형성').sort((a,b)=>Math.abs(a.patPivot)-Math.abs(b.patPivot));
- v.innerHTML=`<div class="grid4">
- <div class="card"><div class="lbl">A등급 (핵심 후보)</div><div class="big">${fmt(S.gradeA??0)}</div><div class="sub">차트·가격 위치·실적 모두 충족 · B등급 ${fmt(S.gradeB??0)}</div></div>
- <div class="card"><div class="lbl">8개 조건 모두 충족</div><div class="big">${fmt(S.pass)}</div><div class="sub ${dPass>0?'up':dPass<0?'down':''}">${dPass==null?'직전 스캔 없음':'직전 대비 '+(dPass>0?'+':'')+dPass}</div></div>
- <div class="card"><div class="lbl">VCP 후보</div><div class="big">${fmt(S.vcp)}</div><div class="sub">돌파 지점 근처의 수축 패턴</div></div>
- <div class="card"><div class="lbl">베이스 패턴</div><div class="big">${fmt(S.patterns??pt.length)}</div><div class="sub">피벗 근처의 컵·플랫·W·플래그</div></div>
- <div class="card"><div class="lbl">신규 진입</div><div class="big">${nIn==null?'—':fmt(nIn)}</div><div class="sub ${nOut>0?'down':''}">${nOut==null?'비교할 직전 스캔 없음':'이탈 '+nOut}</div></div>
- </div>
- <p class="meta" style="margin-top:10px">기준일 ${esc(S.asOf)} ${S.intraday?'<b class="down">장중 시세</b>(15~20분 지연, 장 마감 후 스캔에서 종가로 바뀜)':m==='kr'?'종가(KRX 공식 종가)':'정규장 종가(시간외 거래 제외)'} · 스캔 대상 ${fmt(S.universe)}종목 중 ${fmt(S.analyzed)}종목 분석${S.missing>S.universe*0.05?` · <span class="down">시세를 못 받은 종목 ${fmt(S.missing)}개</span>`:''}</p>
- <div class="grid2">
- <div class="card"><h2>VCP 후보</h2><p class="note">RS ${PR} 이상 중 조정폭이 점점 줄고 거래량이 마르며 피벗에 다가선 종목. 피벗 돌파와 거래량 급증을 확인하세요.</p>
-  <div class="scroll short">${vc.length?`<table><thead><tr><th>종목</th><th>수축 단계(%)</th><th class="num">RS</th><th class="num">피벗까지</th><th class="num hide-sm">거래량 10/50일</th><th>최근 6개월</th></tr></thead><tbody>${vc.map(r=>`<tr>${nameCell(m,r)}<td>${esc(r.vcpDepths.split('/').join(' → '))}</td><td class="num">${r.rs}</td><td class="num">${pct(r.toPivot)}</td><td class="num hide-sm">${r.dryUp?.toFixed(2)??'—'}</td><td>${spark(r.spark)}</td></tr>`).join('')}</tbody></table>`:'<p class="empty">오늘은 조건에 맞는 VCP 후보가 없습니다.</p>'}</div></div>
- <div class="card"><h2>신규 진입 · 이탈</h2><p class="note">직전 거래일 스캔과 비교해 8개 조건을 새로 모두 충족했거나 더는 충족하지 않는 종목.</p>
-  <div class="scroll short">${!ch?'<p class="empty">비교할 직전 거래일 결과가 아직 없습니다. 다음 거래일 스캔부터 표시됩니다.</p>':ch.length?`<table><thead><tr><th>구분</th><th>종목</th><th class="num">충족</th><th class="num">RS</th></tr></thead><tbody>${ch.map(r=>`<tr><td><span class="pill ${r.change==='진입'?'in':'out'}">${r.change}</span></td>${nameCell(m,r)}<td class="num">${r.score==null?'6개 이하':r.score+'/8'}</td><td class="num">${r.rs??'—'}</td></tr>`).join('')}</tbody></table>`:'<p class="empty">직전 스캔과 달라진 종목이 없습니다.</p>'}</div></div></div>
- <div class="card" style="margin-top:12px"><h2>베이스 패턴 후보</h2><p class="note">8개 조건 충족, RS ${PR} 이상이면서 피벗 근처(아래 15% ~ 돌파 후 5%)에 있는 베이스. 모양은 주봉, 손잡이·피벗은 일봉으로 판별했습니다. 피벗에 가까운 순.</p>
-  <div class="scroll short">${pt.length?`<table><thead><tr><th>종목</th><th>패턴</th><th class="hide-sm">내용</th><th class="num">RS</th><th class="num">피벗까지</th><th>최근 6개월</th></tr></thead><tbody>${pt.map(r=>`<tr>${nameCell(m,r)}<td>${pills(r.pattern)}</td><td class="hide-sm" style="white-space:normal">${esc(r.patNote)}</td><td class="num">${r.rs}</td><td class="num">${pct(r.patPivot)}</td><td>${spark(r.spark)}</td></tr>`).join('')}</tbody></table>`:'<p class="empty">오늘은 피벗 근처의 베이스 패턴이 없습니다.</p>'}</div></div>
- <div class="card" style="margin-top:12px"><div class="controls"><h2>전체 후보</h2><div class="controls">
-  <select id="f"><option value="A">A등급 (핵심 후보)</option><option value="AB">A·B등급</option><option value="8">8개 모두 충족</option><option value="7">7개 이상 충족</option><option value="vcp">VCP 후보만</option><option value="pat">베이스 패턴만</option></select>
-  <input id="q" type="search" placeholder="종목명·코드 검색"></div></div>
-  <p class="note"><b>A</b> 8개 조건 + 가격 위치(고점 ${S.maxFromHigh??15}% 이내, 50일선 +${S.maxAbove50??25}% 이하) + 실적(이익 +${S.epsMin??25}%, 매출 +${S.revMin??20}% 이상) · <b>B</b> 8개 조건 + 가격 위치 · <b>C</b> 8개 조건만. 이익·매출 성장은 최근 분기의 전년 같은 분기 대비입니다. 조건 칸의 네모 8개는 아래 "스캔 기준" 순서입니다. 빈 네모가 미충족 조건. 종목명을 누르면 차트가 열립니다.</p>
-  <div class="scroll"><table id="main"><thead><tr>
-  <th class="sortable" data-k="grade">등급·종목</th><th class="sortable num" data-k="p">종가</th><th class="sortable num" data-k="chg">등락</th><th class="sortable num" data-k="rs">RS</th><th class="sortable num" data-k="eps" title="최근 분기 순이익·매출, 전년 같은 분기 대비">이익 성장</th><th class="sortable num hide-sm" data-k="rev">매출 성장</th>
-  <th class="sortable" data-k="score">조건</th><th class="sortable num" data-k="fromHi">고점 대비</th><th class="sortable num hide-sm" data-k="vs50">50일선 대비</th>
-  <th class="sortable num hide-sm" data-k="volRatio">거래량 10/50일</th><th class="sortable" data-k="vcp">VCP·패턴</th><th class="hide-sm">최근 6개월</th></tr></thead><tbody></tbody></table>
-  <p class="empty" id="none" hidden>조건에 맞는 종목이 없습니다.</p></div></div>`;
- const f=$('#f'),q=$('#q');f.value=st[m].f;q.value=st[m].q;
- f.onchange=()=>{st[m].f=f.value;table();};q.oninput=()=>{st[m].q=q.value.trim().toLowerCase();table();};
- document.querySelectorAll('#main th.sortable').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(st[m].sort===k)st[m].dir*=-1;else{st[m].sort=k;st[m].dir=k==='n'?1:-1;}table();});
- table();}
-function egood(v,min){return v==null?'':v>=min?'up':v<0?'down':'';}
-function table(){const m=st.m,o=st[m],S2=Object.assign({epsMin:25,revMin:20},D[m].summary);let rows=D[m].rows.slice();
- if(o.f==='A')rows=rows.filter(r=>r.grade==='A');if(o.f==='AB')rows=rows.filter(r=>r.grade==='A'||r.grade==='B');if(o.f==='8')rows=rows.filter(r=>r.score===8);if(o.f==='vcp')rows=rows.filter(r=>r.vcp);if(o.f==='pat')rows=rows.filter(r=>r.pattern&&r.pattern!=='컵 형성'&&r.score===8&&r.rs>=(D[m].summary.patRs??85));
+ if(!S){v.innerHTML=`<p class="empty" style="margin-top:20px">${NAMES[m]} 스캔 결과가 아직 없습니다.</p>`;return;}
+ const mk=S.mkt,A=M.rows.filter(r=>r.grade==='A');
+ const ord={'매수 검토':0,'관망':1,'보류':2};
+ A.sort((a,b)=>(ord[a.view?.v]??1)-(ord[b.view?.v]??1)||Math.abs(a.patPivot??a.toPivot??99)-Math.abs(b.patPivot??b.toPivot??99)||b.rs-a.rs);
+ const buy=A.filter(r=>r.view?.v==='매수 검토').length;
+ const vp=M.rows.filter(r=>r.grade!=='A'&&(r.vcp||(r.pattern&&r.pattern!=='컵 형성'&&r.score===8&&r.rs>=(S.patRs??85))));
+ const ch=changes(m),h=hist(m),prevH=h.length>1?h[h.length-2]:null,dPass=prevH?S.pass-prevH.pass:null;
+ v.innerHTML=`
+ ${mk?`<div class="mkt ${mk.state}"><span class="dot"></span><div><b>${esc(mk.name)} ${esc(mk.label)}</b><div class="sub">${fmt(mk.close)} (${pct(mk.chg,2)}) · 50일선 ${pct(mk.vs50)} · 200일선 ${pct(mk.vs200)}${mk.state==='down'?' · 신규 매수 쉬는 구간':mk.state==='correction'?' · 매수 비중 줄이기':''}</div></div></div>`:''}
+ <div class="stats"><div class="stat hl"><div class="n">${buy}</div><div class="l">매수 검토</div></div><div class="stat"><div class="n">${A.length}</div><div class="l">A등급</div></div><div class="stat"><div class="n">${fmt(S.gradeB??0)}</div><div class="l">B등급</div></div><div class="stat"><div class="n">${fmt(S.pass)}</div><div class="l">8개 조건${!dPass?'':` <span class="${dPass>0?'up':dPass<0?'down':''}">${dPass>0?'+':''}${dPass}</span>`}</div></div></div>
+ <p class="meta">기준일 ${esc(S.asOf)} ${S.intraday?'<b class="down">장중 시세</b>':'종가'} · 스캔 ${fmt(S.universe)}종목${S.missing>S.universe*0.05?` · <span class="down">시세 누락 ${fmt(S.missing)}</span>`:''}</p>
+ <section class="sec"><h2>A등급 · 미너비니 판정 <span class="cnt">${A.length}종목</span></h2>
+ <p class="note">차트·가격 위치·실적을 모두 충족한 핵심 후보입니다. 매수 검토 → 관망 순, 피벗에 가까운 순.</p>
+ ${A.length?`<div class="cards">${A.map(r=>card(m,r)).join('')}</div>`:'<p class="empty">오늘은 A등급 종목이 없습니다. 아래 B등급과 패턴 후보를 참고하세요.</p>'}</section>
+ <details class="fold" ${vp.length&&!A.length?'open':''}><summary>VCP·베이스 패턴 후보<span class="cnt">${vp.length}</span></summary><div class="in"><p class="note">A등급 외에 RS ${S.patRs??85} 이상이면서 피벗 근처에 베이스가 있는 종목(실적이나 가격 위치 조건은 미달).</p>
+ ${vp.length?vp.sort((a,b)=>Math.abs(a.patPivot??a.toPivot)-Math.abs(b.patPivot??b.toPivot)).map(r=>row(m,r,`RS ${r.rs}<br><span class="cd">피벗 ${pct(r.patPivot??r.toPivot)}</span>`)).join(''):'<p class="empty">없음</p>'}</div></details>
+ <details class="fold"><summary>신규 진입 · 이탈<span class="cnt">${ch?ch.length:'—'}</span></summary><div class="in"><p class="note">직전 거래일과 비교해 8개 조건을 새로 충족했거나 깨진 종목.</p>
+ ${!ch?'<p class="empty">비교할 직전 결과가 아직 없습니다.</p>':ch.length?ch.map(r=>row(m,r,`<span class="pill ${r.change==='진입'?'in':'out'}">${r.change}</span><br><span class="cd">${r.score==null?'6개 이하':r.score+'/8'}</span>`)).join(''):'<p class="empty">변동 없음</p>'}</div></details>
+ <details class="fold"><summary>전체 목록<span class="cnt">${M.rows.length}</span></summary><div class="in">
+ <div class="controls"><select id="f"><option value="B">B등급 이상</option><option value="8">8개 모두 충족</option><option value="7">7개 이상</option></select><input id="q" type="search" placeholder="종목명·코드"></div><div id="list"></div></div></details>`;
+ const f=$('#f'),q=$('#q');f.value=st[m].f;q.value=st[m].q;f.onchange=()=>{st[m].f=f.value;list();};q.oninput=()=>{st[m].q=q.value.trim().toLowerCase();list();};list();}
+function list(){const m=st.m,o=st[m];let rows=D[m].rows.slice();
+ if(o.f==='B')rows=rows.filter(r=>r.grade==='A'||r.grade==='B');if(o.f==='8')rows=rows.filter(r=>r.score===8);
  if(o.q)rows=rows.filter(r=>(r.n+' '+r.s).toLowerCase().includes(o.q));
- const GO={A:0,B:1,C:2,'':3};
- rows.sort((a,b)=>o.sort==='grade'?(o.dir*(GO[a.grade||'']-GO[b.grade||''])||b.rs-a.rs):o.sort==='n'?o.dir*a.n.localeCompare(b.n,'ko'):(o.dir*((a[o.sort]??-1e9)-(b[o.sort]??-1e9))||b.rs-a.rs));
- document.querySelectorAll('#main th.sortable').forEach(th=>th.setAttribute('aria-sort',th.dataset.k===o.sort?(o.dir>0?'ascending':'descending'):'none'));
- $('#none').hidden=rows.length>0;
- $('#main tbody').innerHTML=rows.map(r=>`<tr>${nameCell(m,r)}<td class="num">${price(m,r.p)}</td><td class="num ${r.chg>0?'up':r.chg<0?'down':''}">${pct(r.chg,2)}</td><td class="num">${r.rs}</td><td class="num ${egood(r.eps,S2.epsMin)}">${pct(r.eps,0)}</td><td class="num hide-sm ${egood(r.rev,S2.revMin)}">${pct(r.rev,0)}</td>
- <td><span class="dots" title="8개 중 ${r.score}개 충족">${[...r.crit].map((b,i)=>`<span class="dot${b==='1'?'':' off'}" title="조건 ${i+1}"></span>`).join('')}</span></td>
- <td class="num">${pct(r.fromHi)}</td><td class="num hide-sm">${pct(r.vs50)}</td><td class="num hide-sm">${r.volRatio?.toFixed(2)??'—'}</td>
- <td style="white-space:normal">${r.vcp?'<span class="pill vcp">VCP</span> ':''}${pills(r.pattern)}</td><td class="hide-sm">${spark(r.spark)}</td></tr>`).join('');}
+ const GO={A:0,B:1,C:2};rows.sort((a,b)=>(GO[a.grade]??3)-(GO[b.grade]??3)||b.rs-a.rs);
+ $('#list').innerHTML=rows.length?rows.slice(0,300).map(r=>row(m,r,`RS ${r.rs}<br><span class="cd">${pct(r.eps,0)} / ${pct(r.rev,0)}</span>`)).join('')+(rows.length>300?`<p class="empty">상위 300개만 표시</p>`:''):'<p class="empty">조건에 맞는 종목이 없습니다.</p>';}
 function breadth(){const el=$('#breadth');const ser=['kr','us'].map((m,i)=>({m,c:i?'#7a6fd1':'var(--accent)',pts:hist(m).map(h=>({d:new Date(h.asOf+'T00:00:00Z'),v:h.pass,a:h.asOf}))})).filter(s=>s.pts.length);
- if(!ser.length){el.innerHTML='<p class="empty">기록이 쌓이면 여기에 추이가 그려집니다.</p>';return;}
- const W=Math.max(300,el.clientWidth||800),H=200,ml=40,mr=70,mt=10,mb=24,all=ser.flatMap(s=>s.pts);
+ if(!ser.length){el.innerHTML='<p class="empty">기록이 쌓이면 추이가 그려집니다.</p>';return;}
+ const W=Math.max(300,el.clientWidth||600),H=180,ml=36,mr=64,mt=10,mb=22,all=ser.flatMap(s=>s.pts);
  let d0=Math.min(...all.map(p=>+p.d)),d1=Math.max(...all.map(p=>+p.d));if(d0===d1){d0-=3*864e5;d1+=3*864e5;}
  const vmax=Math.max(1,...all.map(p=>p.v))*1.15,x=d=>ml+(d-d0)/(d1-d0)*(W-ml-mr),y=v=>H-mb-v/vmax*(H-mt-mb);
- const ticks=[0,.25,.5,.75,1].map(t=>Math.round(vmax*t));
- let s=`<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}">`+ticks.map(t=>`<line x1="${ml}" x2="${W-mr}" y1="${y(t)}" y2="${y(t)}" stroke="var(--line)"/><text x="${ml-6}" y="${y(t)+4}" text-anchor="end">${t}</text>`).join('');
- const nx=Math.min(6,Math.max(2,Math.floor(W/120)));for(let i=0;i<nx;i++){const d=d0+(d1-d0)*i/(nx-1),dd=new Date(d);s+=`<text x="${x(d)}" y="${H-6}" text-anchor="middle">${dd.getUTCMonth()+1}/${dd.getUTCDate()}</text>`;}
+ let s=`<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}">`+[0,.5,1].map(t=>Math.round(vmax*t)).map(t=>`<line x1="${ml}" x2="${W-mr}" y1="${y(t)}" y2="${y(t)}" stroke="var(--line)"/><text x="${ml-6}" y="${y(t)+4}" text-anchor="end">${t}</text>`).join('');
+ const nx=Math.min(5,Math.max(2,Math.floor(W/110)));for(let i=0;i<nx;i++){const d=d0+(d1-d0)*i/(nx-1),dd=new Date(d);s+=`<text x="${x(d)}" y="${H-5}" text-anchor="middle">${dd.getUTCMonth()+1}/${dd.getUTCDate()}</text>`;}
  for(const se of ser){s+=`<path d="${se.pts.map((p,i)=>(i?'L':'M')+x(+p.d)+' '+y(p.v)).join('')}" fill="none" stroke="${se.c}" stroke-width="2" stroke-linejoin="round"/>`;
-  if(se.pts.length<40)s+=se.pts.map(p=>`<circle cx="${x(+p.d)}" cy="${y(p.v)}" r="3" fill="${se.c}"><title>${p.a} ${NAMES[se.m]} ${p.v}종목</title></circle>`).join('');
-  const l=se.pts[se.pts.length-1];s+=`<text x="${x(+l.d)+8}" y="${y(l.v)+4}" style="fill:${se.c}">${NAMES[se.m]} ${l.v}</text>`;}
+  const l=se.pts[se.pts.length-1];s+=`<circle cx="${x(+l.d)}" cy="${y(l.v)}" r="3" fill="${se.c}"/><text x="${x(+l.d)+7}" y="${y(l.v)+4}" style="fill:${se.c}">${NAMES[se.m]} ${l.v}</text>`;}
  el.innerHTML=s+'</svg>';}
-(function(){const parts=['kr','us'].filter(m=>D[m].summary).map(m=>`${NAMES[m]} ${fmt(D[m].summary.gradeA??0)}종목`);
- $('#take').textContent=parts.length?'A등급(차트·가격 위치·실적 모두 충족): '+parts.join(', ')+'. A등급과 VCP·베이스 패턴 후보부터 차트를 확인하세요.':'아직 스캔 결과가 없습니다.';
- $('#gen').textContent='화면 생성 '+D.generatedAt.replace('T',' ').slice(0,16);
+(function(){$('#gen').textContent=D.generatedAt.replace('T',' ').slice(5,16)+' 갱신';
  if(!D.kr.summary&&D.us.summary)st.m='us';
- document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{st.m=t.dataset.m;render();});
- render();breadth();addEventListener('resize',breadth);})();
-</script></body></html>
-"""
+ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{st.m=t.dataset.m;render();window.scrollTo({top:0});});
+ render();$('#breadthBox').addEventListener('toggle',breadth);})();
+</script></body></html>"""
 
 
 # ---------------------------------------------------------------- 실행
