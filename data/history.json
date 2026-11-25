@@ -793,7 +793,7 @@
 {
 "market": "kr",
 "asOf": "2026-11-24",
-"scannedAt": "2026-11-25T04:44:59+09:00",
+"scannedAt": "2026-11-25T09:13:39+09:00",
 "universe": 595,
 "analyzed": 586,
 "missing": 0,
@@ -809,7 +809,49 @@
 "maxAbove50": 25.0,
 "epsMin": 25.0,
 "revMin": 20.0,
-"seconds": 31,
-"intraday": false
+"seconds": 22,
+"intraday": false,
+"mkt": {
+"name": "코스피",
+"close": 4708.54,
+"chg": -3.31,
+"vs50": -21.8,
+"vs200": -27.8,
+"state": "down",
+"label": "하락 추세"
+},
+"buy": 0
+},
+{
+"market": "us",
+"asOf": "2026-11-24",
+"scannedAt": "2026-11-25T09:14:52+09:00",
+"universe": 1790,
+"analyzed": 1752,
+"missing": 0,
+"pass": 205,
+"near": 169,
+"vcp": 23,
+"patterns": 47,
+"patRs": 85,
+"gradeA": 17,
+"gradeB": 165,
+"rsMin": 80,
+"maxFromHigh": 15.0,
+"maxAbove50": 25.0,
+"epsMin": 25.0,
+"revMin": 20.0,
+"seconds": 73,
+"intraday": false,
+"mkt": {
+"name": "S&P 500",
+"close": 7201.09,
+"chg": -0.5,
+"vs50": -5.4,
+"vs200": -2.0,
+"state": "down",
+"label": "하락 추세"
+},
+"buy": 0
 }
 ]
