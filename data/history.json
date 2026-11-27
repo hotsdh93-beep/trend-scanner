@@ -889,8 +889,8 @@
 {
 "market": "us",
 "asOf": "2026-11-25",
-"scannedAt": "2026-11-26T13:13:56+09:00",
-"universe": 1798,
+"scannedAt": "2026-11-27T13:22:00+09:00",
+"universe": 1797,
 "analyzed": 1761,
 "missing": 0,
 "pass": 214,
@@ -905,7 +905,7 @@
 "maxAbove50": 25.0,
 "epsMin": 25.0,
 "revMin": 20.0,
-"seconds": 78,
+"seconds": 98,
 "intraday": false,
 "mkt": {
 "name": "S&P 500",
