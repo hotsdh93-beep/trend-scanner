@@ -949,5 +949,37 @@
 "label": "하락 추세"
 },
 "buy": 0
+},
+{
+"market": "kr",
+"asOf": "2026-11-27",
+"scannedAt": "2026-11-28T03:31:22+09:00",
+"universe": 618,
+"analyzed": 609,
+"missing": 0,
+"pass": 28,
+"near": 16,
+"vcp": 7,
+"patterns": 3,
+"patRs": 85,
+"gradeA": 2,
+"gradeB": 14,
+"rsMin": 80,
+"maxFromHigh": 15.0,
+"maxAbove50": 25.0,
+"epsMin": 25.0,
+"revMin": 20.0,
+"seconds": 39,
+"intraday": false,
+"mkt": {
+"name": "코스피",
+"close": 4711.21,
+"chg": 0.29,
+"vs50": -20.0,
+"vs200": -27.7,
+"state": "down",
+"label": "하락 추세"
+},
+"buy": 0
 }
 ]
