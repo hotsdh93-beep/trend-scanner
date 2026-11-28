@@ -981,5 +981,37 @@
 "label": "하락 추세"
 },
 "buy": 0
+},
+{
+"market": "us",
+"asOf": "2026-11-27",
+"scannedAt": "2026-11-28T13:02:14+09:00",
+"universe": 1811,
+"analyzed": 1773,
+"missing": 0,
+"pass": 225,
+"near": 176,
+"vcp": 30,
+"patterns": 45,
+"patRs": 85,
+"gradeA": 18,
+"gradeB": 182,
+"rsMin": 80,
+"maxFromHigh": 15.0,
+"maxAbove50": 25.0,
+"epsMin": 25.0,
+"revMin": 20.0,
+"seconds": 128,
+"intraday": false,
+"mkt": {
+"name": "S&P 500",
+"close": 7297.49,
+"chg": 1.6,
+"vs50": -3.9,
+"vs200": -0.8,
+"state": "down",
+"label": "하락 추세"
+},
+"buy": 0
 }
 ]
